@@ -17,6 +17,7 @@ HEADERS = {"User-Agent": "DWG-Forecast-Intelligence/0.2 contact: Delaware Weathe
 
 MODEL_CONFIG = {
     "HRRR": {"id":"ncep_hrrr_conus", "role":"3-km short range", "cadence":"Hourly"},
+    "RAP": {"id":"ncep_rap_conus", "role":"Rapid Refresh / upper-air support", "cadence":"Hourly"},
     "GFS": {"id":"ncep_gfs_global", "role":"Global deterministic", "cadence":"Every 6 hours"},
     "ECMWF IFS": {"id":"ecmwf_ifs025", "role":"Global deterministic", "cadence":"Every 6 hours"},
     "NBM": {"id":"ncep_nbm_conus", "role":"National Blend", "cadence":"Hourly"},
@@ -111,6 +112,21 @@ def previous_run_signal(lat, lon, model_id):
     df["time"] = pd.to_datetime(df["time"])
     return df
 
+@st.cache_data(ttl=300)
+def nomads_rap_status():
+    now_utc = datetime.now(timezone.utc)
+    candidates = [now_utc, now_utc - pd.Timedelta(days=1)]
+    for dt in candidates:
+        day = dt.strftime("%Y%m%d")
+        url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_rap.pl?dir=%2Frap.{day}"
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=12)
+            if r.ok and "RAP Analysis/Forecasts" in r.text:
+                return {"ok": True, "date": day, "url": url}
+        except Exception:
+            pass
+    return {"ok": False, "date": None, "url": "https://nomads.ncep.noaa.gov/cgi-bin/filter_rap.pl"}
+
 def fmt(x, digits=0, suffix=""):
     if x is None or pd.isna(x):
         return "—"
@@ -179,7 +195,7 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Workstation", [
-    "Command Center","Observations","Forecast Guidance","Model Intelligence",
+    "Command Center","Observations","Radar & Satellite","Forecast Guidance","Model Intelligence",
     "Model Trends","Hazards","Forecaster Desk","Verification","System Status"
 ])
 
@@ -244,6 +260,29 @@ elif page == "Observations":
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+elif page == "Radar & Satellite":
+    st.header("Live Radar & Satellite")
+    st.caption("Operational imagery links are refreshed by NOAA/NWS. Use the loops for situational awareness; official warnings remain in the Hazard Desk.")
+
+    radar_tab, sat_tab = st.tabs(["📡 NWS Radar", "🛰️ GOES-East Satellite"])
+
+    with radar_tab:
+        site = st.selectbox("Radar site", ["KDOX — Dover, DE", "KDIX — Philadelphia / Mt. Holly"], key="radarsite")
+        rid = site.split(" ")[0]
+        st.subheader(f"{rid} Base Reflectivity Loop")
+        st.image(f"https://radar.weather.gov/ridge/standard/{rid}_loop.gif", use_container_width=True)
+        st.caption("Source: NOAA/National Weather Service RIDGE radar imagery. Loop updates as the source image updates.")
+        st.link_button("Open full NWS Radar Viewer", "https://radar.weather.gov/")
+
+    with sat_tab:
+        product = st.selectbox("GOES-East product", ["GeoColor","Clean Longwave IR","Water Vapor"], key="satproduct")
+        band = {"GeoColor":"GEOCOLOR","Clean Longwave IR":"13","Water Vapor":"09"}[product]
+        image_url = f"https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/{band}/1250x750.jpg"
+        st.subheader(f"GOES-19 CONUS — {product}")
+        st.image(image_url, use_container_width=True)
+        st.caption("Source: NOAA/NESDIS/STAR GOES-19. GeoColor is true-color-like by day and multispectral IR at night.")
+        st.link_button("Open NOAA GOES Imagery Viewer", f"https://www.star.nesdis.noaa.gov/GOES/conus_band.php?band={band}&sat=G19")
+
 elif page == "Forecast Guidance":
     st.header("NWS Forecast Guidance")
     zone = st.selectbox("Forecast zone", list(LOCATIONS))
@@ -259,7 +298,7 @@ elif page == "Forecast Guidance":
 
 elif page == "Model Intelligence":
     st.header("Model Intelligence Desk")
-    st.caption("Live point guidance. NOAA models are identified by model; ECMWF IFS is included as a global deterministic comparator.")
+    st.caption("Live point guidance plus NOAA/NCEP native-feed monitoring. RAP is now included alongside HRRR, GFS, ECMWF IFS, NBM and ensemble-mean guidance.")
     zone = st.selectbox("Zone", list(LOCATIONS), key="modelzone")
     loc = LOCATIONS[zone]
     horizon = st.selectbox("Display horizon", [24,48,72], index=1)
@@ -299,7 +338,7 @@ elif page == "Model Intelligence":
     else:
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-        det = summary_df[summary_df["Model"].isin(["HRRR","GFS","ECMWF IFS","NBM"])]
+        det = summary_df[summary_df["Model"].isin(["HRRR","RAP","GFS","ECMWF IFS","NBM"])]
         temp_spread = float(det["Temp now °F"].max()-det["Temp now °F"].min()) if len(det)>1 else 0
         gust_spread = float(det["Peak Gust mph"].max()-det["Peak Gust mph"].min()) if len(det)>1 else 0
         qpf_spread = float(det["24h QPF in"].max()-det["24h QPF in"].min()) if len(det)>1 else 0
@@ -341,12 +380,17 @@ elif page == "Model Intelligence":
         with st.expander("About the model feeds"):
             st.write("HRRR, GFS, NBM and HGEFS are NOAA/NCEP guidance. ECMWF IFS is shown as a global deterministic comparison.")
             st.write("This version retrieves lightweight point guidance through Open-Meteo's model APIs so the Chromebook-hosted workstation remains responsive.")
-            st.write("Direct NOMADS GRIB2 ingestion for full native fields and upper-air maps remains a later workstation layer.")
+            rap_native = nomads_rap_status()
+            if rap_native["ok"]:
+                st.success(f"NOAA/NCEP NOMADS RAP native GRIB2 catalog is reachable for {rap_native['date']}.")
+            else:
+                st.warning("NOAA/NCEP NOMADS RAP native catalog did not answer this refresh; RAP point guidance remains available.")
+            st.write("The workstation now monitors the native NOAA/NCEP RAP GRIB2 catalog and uses RAP point guidance in comparisons. Full field decoding/mapping remains separate from this lightweight Chromebook layer.")
 
 elif page == "Model Trends":
     st.header("Run-to-Run Trend Desk")
     zone = st.selectbox("Zone", list(LOCATIONS), key="trendzone")
-    model_name = st.selectbox("Model", ["HRRR","GFS","ECMWF IFS","NBM"])
+    model_name = st.selectbox("Model", ["HRRR","RAP","GFS","ECMWF IFS","NBM"])
     loc = LOCATIONS[zone]
     cfg = MODEL_CONFIG[model_name]
     st.caption("Compares current guidance with the same valid hours from roughly 24 hours earlier.")
@@ -455,6 +499,7 @@ elif page == "System Status":
     st.write("**NBM point guidance:** 🟢 v0.2")
     st.write("**Ensemble-mean guidance:** 🟢 v0.2")
     st.write("**Run-to-run trend desk:** 🟢 v0.2")
-    st.write("**Direct NOAA GRIB / RAP adapter:** 🔵 Planned")
+    rap_native = nomads_rap_status()
+    st.write("**NOAA/NCEP NOMADS RAP native feed:**", "🟢 Live" if rap_native["ok"] else "🔴 Unreachable this refresh")
     st.write("**Persistent database:** 🔵 Planned")
-    st.write("**Radar/Satellite panels:** 🔵 Planned")
+    st.write("**NWS Radar / GOES-19 satellite panels:** 🟢 Live")
