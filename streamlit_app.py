@@ -14,15 +14,9 @@ LOCATIONS = {
 }
 HEADERS = {"User-Agent": "DWG-Forecast-Intelligence/0.1 contact: Delaware Weather Guy"}
 
-st.markdown("""
-<style>
-.stApp {background:#07111f; color:#eef6ff}
-[data-testid="stSidebar"] {background:#0b1728}
-.dwg-card {background:#0d1d31;border:1px solid #1e3856;border-radius:12px;padding:16px;margin-bottom:12px}
-.small {font-size:.82rem;color:#9fb3c8}
-h1,h2,h3 {color:#f4f9ff}
-</style>
-""", unsafe_allow_html=True)
+
+
+
 
 def get_json(url, timeout=10):
     r = requests.get(url, headers=HEADERS, timeout=timeout)
@@ -87,6 +81,23 @@ def demo_obs(city):
 
 st.sidebar.title("DWG Intelligence")
 st.sidebar.caption("Data Over Drama")
+display_mode = st.sidebar.segmented_control("Display", ["☀️ Bright", "🌙 Dark"], default="☀️ Bright")
+if display_mode == "🌙 Dark":
+    bg, panel, side, textc, muted, border = "#07111f", "#0d1d31", "#0b1728", "#eef6ff", "#aebed0", "#274663"
+else:
+    bg, panel, side, textc, muted, border = "#f5f9fd", "#ffffff", "#e8f2fb", "#14253a", "#52677d", "#b9d2e8"
+st.markdown(f"""
+<style>
+.stApp {{background:{bg}; color:{textc}}}
+[data-testid="stSidebar"] {{background:{side}}}
+[data-testid="stSidebar"] * {{color:{textc} !important}}
+.dwg-card {{background:{panel};border:1px solid {border};border-radius:12px;padding:16px;margin-bottom:12px}}
+.small {{font-size:.82rem;color:{muted}}}
+h1,h2,h3,p,span,label {{color:{textc}}}
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"] {{color:{textc} !important}}
+[data-testid="stCaptionContainer"] {{color:{muted} !important}}
+</style>
+""", unsafe_allow_html=True)
 page = st.sidebar.radio("Workstation", [
     "Command Center","Observations","Forecast Guidance","Model Desk",
     "Hazards","Forecaster Desk","Verification","System Status"
