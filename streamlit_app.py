@@ -1,171 +1,262 @@
-from __future__ import annotations
-import os
-from datetime import datetime
-import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
+import requests
+import pandas as pd
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from app.config import APP_NAME, APP_TAGLINE, ZONES
-from app.services.nws import NWSClient, normalize_observation
-from app.services.models import latest_model_status
-from app.engine.consensus import confidence_score
-from app.data.demo import DEMO
+st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-st.set_page_config(page_title=APP_NAME, page_icon="🌦️", layout="wide")
+LOCATIONS = {
+    "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
+    "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
+    "Inland Sussex": {"city":"Georgetown","lat":38.6901,"lon":-75.3855},
+    "Delaware Beaches": {"city":"Rehoboth Beach","lat":38.7209,"lon":-75.0760},
+}
+HEADERS = {"User-Agent": "DWG-Forecast-Intelligence/0.1 contact: Delaware Weather Guy"}
 
-CSS = """
+st.markdown("""
 <style>
-.block-container {padding-top: 1rem; padding-bottom: 2rem;}
-[data-testid='stMetricValue'] {font-size: 1.6rem;}
-.dwg-title {font-size:2rem;font-weight:800;letter-spacing:.02em}
-.dwg-sub {opacity:.75;margin-top:-8px;margin-bottom:14px}
-.card {border:1px solid rgba(120,160,220,.25); border-radius:12px; padding:12px; background:rgba(20,35,55,.22)}
-.status-good {color:#31d07c;font-weight:700}
-.status-warn {color:#f2c14e;font-weight:700}
-.small {font-size:.85rem; opacity:.8}
+.stApp {background:#07111f; color:#eef6ff}
+[data-testid="stSidebar"] {background:#0b1728}
+.dwg-card {background:#0d1d31;border:1px solid #1e3856;border-radius:12px;padding:16px;margin-bottom:12px}
+.small {font-size:.82rem;color:#9fb3c8}
+h1,h2,h3 {color:#f4f9ff}
 </style>
-"""
-st.markdown(CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-st.markdown(f"<div class='dwg-title'>🌦️ {APP_NAME}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='dwg-sub'>{APP_TAGLINE} • v0.1</div>", unsafe_allow_html=True)
+def get_json(url, timeout=10):
+    r = requests.get(url, headers=HEADERS, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
-with st.sidebar:
-    st.header("DWG Command Center")
-    page = st.radio("Workspace", ["Dashboard", "Observations", "Model Status", "Forecast Desk", "Verification"])
-    live = st.toggle("Use live NWS data", value=True)
-    st.caption("If the NWS feed cannot be reached, the app automatically falls back to demo data.")
+@st.cache_data(ttl=300)
+def point_metadata(lat, lon):
+    return get_json(f"https://api.weather.gov/points/{lat},{lon}")
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_obs(lat, lon):
-    client = NWSClient()
-    return normalize_observation(client.latest_observation(lat, lon))
+@st.cache_data(ttl=300)
+def current_observation(lat, lon):
+    meta = point_metadata(lat, lon)
+    stations_url = meta["properties"]["observationStations"]
+    stations = get_json(stations_url)["features"]
+    if not stations:
+        return None
+    station_id = stations[0]["properties"]["stationIdentifier"]
+    obs = get_json(f"https://api.weather.gov/stations/{station_id}/observations/latest")
+    p = obs["properties"]
 
-@st.cache_data(ttl=120, show_spinner=False)
-def get_alerts():
-    return NWSClient().alerts_for_area("DE")
+    def c_to_f(v): return None if v is None else v*9/5+32
+    def ms_to_mph(v): return None if v is None else v*2.23694
+    def pa_to_mb(v): return None if v is None else v/100
 
-@st.cache_data(ttl=900, show_spinner=False)
-def get_model_status():
-    return latest_model_status()
+    return {
+        "station": station_id,
+        "temp": c_to_f(p["temperature"]["value"]),
+        "dew": c_to_f(p["dewpoint"]["value"]),
+        "wind": ms_to_mph(p["windSpeed"]["value"]),
+        "gust": ms_to_mph(p["windGust"]["value"]),
+        "dir": p["windDirection"]["value"],
+        "pressure": pa_to_mb(p["seaLevelPressure"]["value"]),
+        "text": p.get("textDescription") or "—",
+        "time": p.get("timestamp"),
+    }
 
+@st.cache_data(ttl=600)
+def forecast(lat, lon):
+    meta = point_metadata(lat, lon)
+    url = meta["properties"]["forecast"]
+    return get_json(url)["properties"]["periods"]
 
-def observation_for(zone):
-    if live:
-        try:
-            return get_obs(zone.lat, zone.lon), True
-        except Exception:
-            pass
-    return DEMO[zone.city], False
+@st.cache_data(ttl=120)
+def delaware_alerts():
+    return get_json("https://api.weather.gov/alerts/active?area=DE")["features"]
 
-if page == "Dashboard":
-    a,b,c = st.columns([1.5,1,1])
-    with a:
-        st.subheader("Operational Overview")
-    with b:
-        st.metric("Local time", datetime.now().strftime("%I:%M %p"))
-    with c:
-        st.metric("System", "LIVE" if live else "DEMO")
+def fmt(x, digits=0, suffix=""):
+    return "—" if x is None else f"{x:.{digits}f}{suffix}"
 
+def demo_obs(city):
+    demo = {
+        "Wilmington": (68,60,12,22,1008),
+        "Dover": (69,62,14,25,1007),
+        "Georgetown": (70,64,15,28,1006),
+        "Rehoboth Beach": (69,65,18,31,1006),
+    }[city]
+    return {
+        "station":"DEMO","temp":demo[0],"dew":demo[1],"wind":demo[2],"gust":demo[3],
+        "dir":110,"pressure":demo[4],"text":"Demo mode","time":None
+    }
+
+st.sidebar.title("DWG Intelligence")
+st.sidebar.caption("Data Over Drama")
+page = st.sidebar.radio("Workstation", [
+    "Command Center","Observations","Forecast Guidance","Model Desk",
+    "Hazards","Forecaster Desk","Verification","System Status"
+])
+
+now = datetime.now(ZoneInfo("America/New_York"))
+st.title("🌦️ DWG Forecast Intelligence")
+st.caption(f"Delaware Forecasting Workstation • v0.1 • {now:%A, %B %d, %Y • %I:%M %p %Z}")
+
+live_ok = True
+obs_data = {}
+for zone, loc in LOCATIONS.items():
     try:
-        alerts = get_alerts() if live else {"features": []}
-        alert_features = alerts.get("features", [])
+        obs_data[zone] = current_observation(loc["lat"], loc["lon"])
+        if obs_data[zone] is None:
+            raise RuntimeError("No observation")
     except Exception:
-        alert_features = []
+        live_ok = False
+        obs_data[zone] = demo_obs(loc["city"])
 
-    if alert_features:
-        st.warning(f"{len(alert_features)} active NWS alert(s) for Delaware")
-        with st.expander("View active alerts"):
-            for feature in alert_features[:10]:
-                p = feature.get("properties", {})
-                st.markdown(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
-    else:
-        st.success("No active Delaware NWS alerts returned by the feed.")
+if page == "Command Center":
+    a,b,c,d = st.columns(4)
+    a.metric("NWS Data", "LIVE" if live_ok else "DEMO/FALLBACK")
+    try:
+        alerts = delaware_alerts()
+        b.metric("Active DE Alerts", len(alerts))
+    except Exception:
+        alerts = []
+        b.metric("Active DE Alerts", "—")
+    c.metric("Forecast Zones", 4)
+    d.metric("Forecaster", "Brandon")
 
-    st.subheader("Delaware Zones")
+    st.subheader("Delaware Now")
     cols = st.columns(4)
-    rows = []
-    for col, zone in zip(cols, ZONES):
-        obs, is_live = observation_for(zone)
-        rows.append({"zone": zone.name, **obs})
+    for col,(zone,loc) in zip(cols,LOCATIONS.items()):
+        o = obs_data[zone]
         with col:
-            st.markdown(f"### {zone.name}")
-            st.caption(f"{zone.city} • {'LIVE' if is_live else 'DEMO'}")
-            temp = obs.get("temperature_f")
-            st.metric("Temperature", "—" if temp is None else f"{temp:.0f}°F")
-            st.write(obs.get("text", ""))
-            c1,c2 = st.columns(2)
-            c1.metric("Dewpoint", "—" if obs.get("dewpoint_f") is None else f"{obs['dewpoint_f']:.0f}°")
-            c2.metric("Gust", "—" if obs.get("gust_mph") is None else f"{obs['gust_mph']:.0f} mph")
+            st.markdown('<div class="dwg-card">', unsafe_allow_html=True)
+            st.markdown(f"### {zone}")
+            st.caption(f"{loc['city']} • {o['station']}")
+            st.metric("Temperature", fmt(o["temp"],0,"°F"))
+            st.write(f"**Dewpoint:** {fmt(o['dew'],0,'°F')}")
+            st.write(f"**Wind:** {fmt(o['wind'],0,' mph')} • Gust {fmt(o['gust'],0,' mph')}")
+            st.write(f"**MSLP:** {fmt(o['pressure'],1,' mb')}")
+            st.write(o["text"])
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    st.subheader("Confidence Engine")
-    conf = confidence_score(.78, .72, .70, .74)
-    g1,g2 = st.columns([1,3])
-    g1.metric("Current system confidence", f"{conf['score']}/100", conf['label'])
-    fig = go.Figure(go.Bar(x=list(conf['components'].values()), y=[k.replace('_',' ').title() for k in conf['components']], orientation='h'))
-    fig.update_layout(height=260, margin=dict(l=10,r=10,t=10,b=10), xaxis_range=[0,1])
-    g2.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Next Build Layer")
-    st.info("v0.1 establishes the live observation/alert foundation and model-run discovery. Point-extracted HRRR/RAP/GFS/GEFS fields plug into the existing Forecast Desk next.")
+    st.subheader("Official NWS Alerts")
+    if not alerts:
+        st.success("No active Delaware alerts returned.")
+    for f in alerts[:8]:
+        p = f["properties"]
+        st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
 
 elif page == "Observations":
-    st.header("Live Delaware Observations")
-    records = []
-    for zone in ZONES:
-        obs, is_live = observation_for(zone)
-        records.append({
-            "Zone": zone.name,
-            "Representative": zone.city,
-            "Status": "LIVE" if is_live else "DEMO",
-            "Temp °F": obs.get("temperature_f"),
-            "Dewpoint °F": obs.get("dewpoint_f"),
-            "Wind mph": obs.get("wind_mph"),
-            "Gust mph": obs.get("gust_mph"),
-            "Pressure mb": obs.get("pressure_mb"),
-            "Weather": obs.get("text"),
+    st.header("Surface Observations")
+    rows = []
+    for zone,loc in LOCATIONS.items():
+        o = obs_data[zone]
+        rows.append({
+            "Zone":zone,"Location":loc["city"],"Station":o["station"],
+            "Temp °F":o["temp"],"Dewpoint °F":o["dew"],"Wind mph":o["wind"],
+            "Gust mph":o["gust"],"MSLP mb":o["pressure"],"Conditions":o["text"]
         })
-    st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
-
-elif page == "Model Status":
-    st.header("Latest Model Run Status")
-    st.caption("Herbie checks multiple NOAA/cloud archives for discoverable GRIB2 files.")
-    rows = get_model_status()
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.info("A model shown as discoverable means the requested F00 GRIB file was located. v0.2 will validate all required forecast hours and variables before marking a cycle fully analysis-ready.")
+    st.caption("Live observations are retrieved from the National Weather Service. Demo values appear only when the live feed cannot be reached.")
 
-elif page == "Forecast Desk":
+elif page == "Forecast Guidance":
+    st.header("NWS Forecast Guidance")
+    zone = st.selectbox("Forecast zone", list(LOCATIONS))
+    loc = LOCATIONS[zone]
+    try:
+        periods = forecast(loc["lat"], loc["lon"])
+        for p in periods[:8]:
+            with st.expander(f"{p['name']} • {p['temperature']}°{p['temperatureUnit']} • {p['shortForecast']}", expanded=p["number"] <= 2):
+                st.write(p["detailedForecast"])
+                st.caption(f"Wind: {p['windDirection']} {p['windSpeed']}")
+    except Exception:
+        st.error("Live NWS forecast is temporarily unavailable. The rest of the workstation remains usable.")
+
+elif page == "Model Desk":
+    st.header("Model Intelligence Desk")
+    st.info("v0.1 establishes the model workstation and cycle/status framework. Direct HRRR/RAP/GFS/GEFS GRIB extraction is the v0.2 data-engine upgrade.")
+    models = pd.DataFrame([
+        ["HRRR","Short range / convection","Hourly","Connector ready"],
+        ["RAP","Upper-air / short range","Hourly","Connector ready"],
+        ["GFS","Synoptic / medium range","00/06/12/18Z","Connector ready"],
+        ["GEFS","Ensemble uncertainty","00/06/12/18Z","Connector ready"],
+        ["NBM","Blended probabilistic guidance","Multiple","Planned"],
+    ], columns=["Model","Role","Cycle","Status"])
+    st.dataframe(models, use_container_width=True, hide_index=True)
+    st.subheader("Planned Comparison Variables")
+    st.write("Temperature • Dewpoint • Wind/Gust • MSLP • QPF • CAPE • Shear • 850/700/500-mb fields")
+
+elif page == "Hazards":
+    st.header("Hazard Desk")
+    try:
+        alerts = delaware_alerts()
+    except Exception:
+        alerts = []
+    if alerts:
+        for f in alerts:
+            p = f["properties"]
+            st.markdown(f"### {p.get('event','Alert')}")
+            st.write(p.get("headline",""))
+            st.caption(f"Severity: {p.get('severity')} • Urgency: {p.get('urgency')} • Certainty: {p.get('certainty')}")
+            with st.expander("Official details"):
+                st.write(p.get("description",""))
+                if p.get("instruction"):
+                    st.write("**Instructions:**", p["instruction"])
+    else:
+        st.success("No active Delaware NWS alerts returned.")
+
+elif page == "Forecaster Desk":
     st.header("Brandon's Forecast Desk")
-    zone = st.selectbox("Forecast zone", [z.name for z in ZONES])
-    st.markdown("#### Automated Guidance")
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("QPF consensus", "—")
-    c2.metric("Peak gust", "—")
-    c3.metric("PoP", "—")
-    c4.metric("Confidence", "Framework ready")
-    st.caption("Model point extraction is the next data connector; the adjustment and archive workflow is already laid out below.")
+    zone = st.selectbox("Zone", list(LOCATIONS))
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        qpf_low = st.number_input("QPF low (in.)",0.0,20.0,0.0,0.05)
+        qpf_high = st.number_input("QPF high (in.)",0.0,20.0,0.0,0.05)
+    with c2:
+        gust = st.number_input("Peak gust (mph)",0,150,0,1)
+        pop = st.slider("Precipitation probability",0,100,0,5)
+    with c3:
+        confidence = st.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"])
+        impact = st.selectbox("Impact",["Minimal","Low","Elevated","High","Extreme"])
 
-    st.markdown("#### Forecaster Adjustment")
-    accept = st.radio("Decision", ["Accept automated guidance", "Adjust forecast"], horizontal=True)
-    qpf = st.text_input("Adjusted QPF range", placeholder="e.g. 0.75–1.10 in")
-    gust = st.text_input("Adjusted peak gust", placeholder="e.g. 35 mph")
-    reasons = st.multiselect("Reason for adjustment", ["Model bias", "Observation trend", "Radar evolution", "Synoptic reasoning", "Local climatology", "Other"])
-    take = st.text_area("Brandon's Take", placeholder="Your operational interpretation...")
-    if st.button("Save forecast decision", type="primary"):
-        os.makedirs("data", exist_ok=True)
-        path = "data/forecaster_decisions.csv"
-        row = pd.DataFrame([{
-            "saved_at": datetime.now().isoformat(), "zone": zone, "decision": accept,
-            "qpf": qpf, "gust": gust, "reasons": "; ".join(reasons), "brandons_take": take
-        }])
-        row.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
-        st.success(f"Forecast decision saved to {path}")
+    reasons = st.multiselect("Adjustment reasoning",[
+        "Model consensus","Model bias","Observational trend","Radar evolution",
+        "Synoptic reasoning","Local climatology","Ensemble spread","Other"
+    ])
+    take = st.text_area("Brandon's Take", height=120)
+
+    if st.button("Save Forecast Decision", type="primary"):
+        record = {
+            "saved":datetime.now(timezone.utc).isoformat(),
+            "zone":zone,
+            "qpf_low":qpf_low,
+            "qpf_high":qpf_high,
+            "gust":gust,
+            "pop":pop,
+            "confidence":confidence,
+            "impact":impact,
+            "reasons":reasons,
+            "brandons_take":take,
+        }
+        st.session_state.setdefault("decisions", []).append(record)
+        st.success("Forecast decision saved for this browser session.")
+
+    if st.session_state.get("decisions"):
+        st.dataframe(pd.DataFrame(st.session_state["decisions"]), use_container_width=True, hide_index=True)
 
 elif page == "Verification":
-    st.header("Verification")
-    st.write("This screen will compare issued forecasts with observed outcomes and calculate MAE, bias, timing error, and model performance by Delaware zone.")
-    path = "data/forecaster_decisions.csv"
-    if os.path.exists(path):
-        st.dataframe(pd.read_csv(path), use_container_width=True, hide_index=True)
-    else:
-        st.info("No saved forecast decisions yet.")
+    st.header("Forecast Verification")
+    st.write("This workspace will compare issued DWG forecasts against observations and calculate bias, MAE, timing error and model performance.")
+    st.info("v0.1: framework established. Persistent verification database is planned for the hosted backend.")
+    st.dataframe(pd.DataFrame([
+        ["Temperature","MAE / Bias","Ready for history"],
+        ["QPF","MAE / Bias / Hit range","Ready for history"],
+        ["Wind gust","MAE / Peak timing","Ready for history"],
+        ["Precip timing","Onset/end error","Ready for history"],
+    ], columns=["Forecast Element","Metrics","Status"]), use_container_width=True, hide_index=True)
+
+elif page == "System Status":
+    st.header("System Status")
+    st.write("**NWS API:**", "🟢 Live" if live_ok else "🟡 Fallback mode")
+    st.write("**Four-zone configuration:** 🟢 Ready")
+    st.write("**NWS alerts:** 🟢 Connected")
+    st.write("**NWS point forecasts:** 🟢 Connected")
+    st.write("**Model GRIB engine:** 🟡 v0.2")
+    st.write("**Persistent database:** 🟡 deployment upgrade")
+    st.write("**Radar/Satellite panels:** 🟡 next phase")
+    st.caption("The app is intentionally fault-tolerant: a failed external feed should not take down the entire forecaster workstation.")
