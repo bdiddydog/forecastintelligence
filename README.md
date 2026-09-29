@@ -70,4 +70,4 @@ streamlit run streamlit_app.py
 
 ## Important operational note
 
-This workstation is decision support. Official watches, warnings and advisories should remain clearly identified as NWS products. Automated model guidance should not silently replace the human forecaster's issued forecast
+This workstation is decision support. Official watches, warnings and advisories should remain clearly identified as NWS products. Automated model guidance should not silently replace the human forecaster's issued forecast.
