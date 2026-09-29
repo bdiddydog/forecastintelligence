@@ -445,7 +445,7 @@ elif page == "Verification":
 
 elif page == "System Status":
     st.header("System Status")
-    st.write("**NWS API:**", "🟢 Live" if live_ok else "🟡 Fallback mode")
+    st.write("**NWS API:**", "🟢 Live" if live_ok else "🔵 Fallback mode")
     st.write("**Four-zone configuration:** 🟢 Ready")
     st.write("**NWS alerts:** 🟢 Connected")
     st.write("**NWS point forecasts:** 🟢 Connected")
@@ -455,6 +455,6 @@ elif page == "System Status":
     st.write("**NBM point guidance:** 🟢 v0.2")
     st.write("**Ensemble-mean guidance:** 🟢 v0.2")
     st.write("**Run-to-run trend desk:** 🟢 v0.2")
-    st.write("**Direct NOAA GRIB / RAP adapter:** 🟡 next model-engine layer")
-    st.write("**Persistent database:** 🟡 next upgrade")
-    st.write("**Radar/Satellite panels:** 🟡 next phase")
+    st.write("**Direct NOAA GRIB / RAP adapter:** 🔵 Planned")
+    st.write("**Persistent database:** 🔵 Planned")
+    st.write("**Radar/Satellite panels:** 🔵 Planned")
