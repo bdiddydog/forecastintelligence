@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2"
+APP_VERSION = "1.2.1"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -1058,7 +1058,15 @@ elif page == "Forecast Production":
 
 **Brandon's Take:** {take}"""
             st.markdown("#### 📰 Post Builder")
-            edited_post=st.text_area("Ready-to-edit post",post,height=360,key=f"{k}_post_preview")
+            preview_key=f"{k}_post_preview"
+            source_key=f"{k}_post_source"
+            # Keep the generated discussion synchronized with the forecast fields.
+            # Preserve manual edits only while the underlying forecast inputs have not changed.
+            if st.session_state.get(source_key) != post:
+                st.session_state[preview_key]=post
+                st.session_state[source_key]=post
+            edited_post=st.text_area("Ready-to-edit post",height=360,key=preview_key)
+            st.caption("The draft refreshes whenever you change the forecast fields above. You can then edit the wording here before saving.")
             bc1,bc2=st.columns(2)
             if bc1.button(f"Save {section} draft",key=f"save_{k}",type="primary",use_container_width=True):
                 st.session_state.setdefault("forecast_production",{})[section]={"saved":datetime.now(timezone.utc).isoformat(),"table":table.to_dict("records"),"post":edited_post}
@@ -1107,5 +1115,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**4070 Forecast Workstation:** 🟢 v1.2 — live evidence + structured forecast production + post builder")
+    st.write("**4070 Forecast Workstation:** 🟢 v1.2.1 — synchronized forecast forms + live discussion/post output")
     st.write("**Discussion Desk:** 🟢 v0.4")
