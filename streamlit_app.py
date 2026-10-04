@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -524,7 +524,7 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 
 page = st.sidebar.radio("Forecast Intelligence", [
     "Morning Desk","4070 Launchpad","NOAA Discussions","Delaware Forecasts","Radar & Satellite",
-    "Models & Upper Air","E-Wall","Forecast Production","Discussion Desk","Hazards","System Status"
+    "Models & Upper Air","E-Wall","Forecast Production","Hazards","System Status"
 ])
 
 now = datetime.now(ZoneInfo("America/New_York"))
@@ -577,26 +577,17 @@ if page == "Morning Desk":
             st.write(f"Gust {fmt(o['gust'],0,' mph')} • {o['text']}")
             st.markdown('</div>',unsafe_allow_html=True)
 
-    st.markdown("### 📝 Today's NOAA/NWS Reading")
-    afdcol,hwocol=st.columns(2)
-    with afdcol:
-        st.markdown("#### Area Forecast Discussion — NWS Mount Holly")
-        try:
-            afd=nws_text_product("AFD")
-            if afd:
-                st.caption(f"Issued {pd.to_datetime(afd['issued']).tz_convert('America/New_York'):%b %d • %I:%M %p ET}" if afd.get("issued") else "Latest issuance")
-                st.text_area("Latest AFD",afd["text"],height=430,key="morning_afd",label_visibility="collapsed")
-            else: st.warning("Latest AFD unavailable.")
-        except Exception as e: st.warning("Mount Holly AFD unavailable on this refresh.")
-    with hwocol:
-        st.markdown("#### Hazardous Weather Outlook — NWS Mount Holly")
-        try:
-            hwo=nws_text_product("HWO")
-            if hwo:
-                st.caption(f"Issued {pd.to_datetime(hwo['issued']).tz_convert('America/New_York'):%b %d • %I:%M %p ET}" if hwo.get("issued") else "Latest issuance")
-                st.text_area("Latest HWO",hwo["text"],height=430,key="morning_hwo",label_visibility="collapsed")
-            else: st.warning("Latest HWO unavailable.")
-        except Exception: st.warning("Mount Holly HWO unavailable on this refresh.")
+    st.markdown("### 📝 Area Forecast Discussion — NWS Mount Holly")
+    st.caption("Primary NOAA discussion reader — kept here at the start of the morning workflow.")
+    try:
+        afd=nws_text_product("AFD")
+        if afd:
+            if afd.get("issued"):
+                st.caption(f"Issued {pd.to_datetime(afd[\'issued\']).tz_convert(\'America/New_York\'):%b %d • %I:%M %p ET}")
+            st.text_area("Latest AFD",afd["text"],height=500,key="morning_afd",label_visibility="collapsed")
+        else: st.warning("Latest Mount Holly AFD unavailable.")
+    except Exception:
+        st.warning("Mount Holly AFD unavailable on this refresh.")
 
     st.markdown("### 🔎 Morning Launch Rack")
     r1,r2,r3,r4=st.columns(4)
@@ -625,21 +616,30 @@ elif page == "4070 Launchpad":
                     st.link_button(f"Open {name}",target,use_container_width=True)
 
 elif page == "NOAA Discussions":
-    st.header("📝 NOAA / NWS Discussion Reader")
-    st.caption("Latest operational text from NWS Mount Holly (PHI), presented inside the Intelligencer.")
-    tabs=st.tabs(["Area Forecast Discussion","Hazardous Weather Outlook"])
-    for tab,ptype,title in zip(tabs,["AFD","HWO"],["Area Forecast Discussion","Hazardous Weather Outlook"]):
-        with tab:
-            try:
-                prod=nws_text_product(ptype)
-                if prod:
-                    st.subheader(title)
-                    if prod.get("issued"):
-                        st.caption(f"Issued {pd.to_datetime(prod['issued']).tz_convert('America/New_York'):%A, %b %d • %I:%M %p ET}")
-                    st.text_area(title,prod["text"],height=720,key=f"reader_{ptype}",label_visibility="collapsed")
-                else: st.warning(f"No current {ptype} product returned.")
-            except Exception as e:
-                st.error(f"The latest {ptype} could not be retrieved from api.weather.gov.")
+    st.header("⚠️ NOAA / NWS Delaware Hazard Reader")
+    st.caption("The AFD is on Morning Desk. This page is reserved for official Delaware hazards so neighboring Maryland counties do not get presented as Delaware guidance.")
+    try: alerts=delaware_alerts()
+    except Exception: alerts=[]
+    if alerts:
+        for feat in alerts:
+            p=feat.get("properties",{})
+            with st.expander(f"{p.get(\'event\',\'Alert\')} — {p.get(\'headline\',\'\')}",expanded=True):
+                st.write(p.get("description",""))
+                if p.get("instruction"): st.info(p.get("instruction"))
+    else: st.success("No active Delaware NWS alerts.")
+    st.markdown("### Mount Holly Hazardous Weather Outlook — Delaware extract")
+    try:
+        hwo=nws_text_product("HWO"); txt=hwo["text"] if hwo else ""
+        lines=txt.splitlines(); keep=[]; active=False
+        for line in lines:
+            up=line.upper()
+            if "DELAWARE" in up or "NEW CASTLE" in up or "KENT DE" in up or "SUSSEX DE" in up: active=True
+            if active: keep.append(line)
+            if active and line.strip()=="$$": break
+        de="\\n".join(keep).strip()
+        if de: st.text_area("Delaware HWO",de,height=520,label_visibility="collapsed")
+        else: st.info("The latest PHI HWO did not contain a clearly separable Delaware section.")
+    except Exception: st.warning("Latest HWO unavailable.")
 
 elif page == "Delaware Forecasts":
     st.header("📍 Delaware Forecast Center")
@@ -949,7 +949,7 @@ elif page == "Forecast Production":
 
     snap=production_snapshot()
     st.markdown("### 📥 Live Forecast Evidence")
-    evidence_tabs=st.tabs(["Delaware Now","Model Consensus","AFD","HWO","Alerts","4070 Tools"])
+    evidence_tabs=st.tabs(["Delaware Now","Model Consensus","Delaware Hazards","Alerts","4070 Tools"])
     with evidence_tabs[0]:
         cols=st.columns(4)
         for col,(z,loc) in zip(cols,LOCATIONS.items()):
@@ -977,16 +977,26 @@ elif page == "Forecast Production":
                 c3.metric("Median temperature",fmt(med.get("Temp"),0,"°F"))
         else: st.warning("Model consensus unavailable on this refresh.")
     with evidence_tabs[2]:
-        st.text_area("Latest Mount Holly Area Forecast Discussion",snap["afd"]["text"] if snap["afd"] else "AFD unavailable.",height=420,key="prod_afd")
+        st.markdown("#### Delaware Hazard Summary")
+        try:
+            hwo=snap["hwo"]; txt=hwo["text"] if hwo else ""
+            lines=txt.splitlines(); keep=[]; active=False
+            for line in lines:
+                up=line.upper()
+                if "DELAWARE" in up or "NEW CASTLE" in up or "KENT DE" in up or "SUSSEX DE" in up: active=True
+                if active: keep.append(line)
+                if active and line.strip()=="$$": break
+            de="\\n".join(keep).strip()
+            if de: st.text_area("Delaware portion of Mount Holly HWO",de,height=420,key="prod_hwo")
+            else: st.info("No clearly separable Delaware HWO section in the latest PHI product.")
+        except Exception: st.warning("HWO unavailable.")
     with evidence_tabs[3]:
-        st.text_area("Latest Mount Holly Hazardous Weather Outlook",snap["hwo"]["text"] if snap["hwo"] else "HWO unavailable.",height=420,key="prod_hwo")
-    with evidence_tabs[4]:
         if snap["alerts"]:
             for feat in snap["alerts"][:8]:
                 p=feat.get("properties",{})
-                st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
+                st.warning(f"**{p.get(\'event\',\'Alert\')}** — {p.get(\'headline\',\'\')}")
         else: st.success("No active Delaware alerts returned by NWS.")
-    with evidence_tabs[5]:
+    with evidence_tabs[4]:
         cols=st.columns(4)
         cols[0].link_button("4070 Radar",wds_portal_url("/radar"),use_container_width=True)
         cols[1].link_button("Model Explorer",WDS_BASE,use_container_width=True)
@@ -1144,5 +1154,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**4070 Forecast Workstation:** 🟢 v1.2.1 — synchronized forecast forms + live discussion/post output")
-    st.write("**Discussion Desk:** 🟢 v0.4")
+    st.write("**4070 Forecast Workstation:** 🟢 v1.2.3 — single AFD reader + Delaware-focused hazards + forecast production")
+    st.write("**Discussion Desk:** merged into Forecast Production")
