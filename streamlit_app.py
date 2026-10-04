@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.3a"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -583,7 +583,8 @@ if page == "Morning Desk":
         afd=nws_text_product("AFD")
         if afd:
             if afd.get("issued"):
-                st.caption(f"Issued {pd.to_datetime(afd[\'issued\']).tz_convert(\'America/New_York\'):%b %d • %I:%M %p ET}")
+                issued_et=pd.to_datetime(afd["issued"]).tz_convert("America/New_York")
+                st.caption(f"Issued {issued_et:%b %d • %I:%M %p ET}")
             st.text_area("Latest AFD",afd["text"],height=500,key="morning_afd",label_visibility="collapsed")
         else: st.warning("Latest Mount Holly AFD unavailable.")
     except Exception:
