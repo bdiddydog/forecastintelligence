@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.2"
+APP_VERSION = "0.3"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -199,6 +199,35 @@ def confidence_from_spread(temp_spread, gust_spread, qpf_spread):
     else: label = "Low"
     return score, label
 
+
+def load_zone_models(zone, days=3):
+    loc = LOCATIONS[zone]
+    frames = {}
+    for name, cfg in MODEL_CONFIG.items():
+        try:
+            frames[name] = model_forecast(loc["lat"], loc["lon"], cfg["id"], days)
+        except Exception:
+            pass
+    return frames
+
+def current_future(df, hours=24):
+    now_local = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+    future = df[df["time"] >= now_local].head(hours)
+    return future if not future.empty else df.head(hours)
+
+def precip_timing(df, threshold=0.005):
+    f = current_future(df, 72)
+    wet = f[f["precipitation"].fillna(0) >= threshold]
+    if wet.empty:
+        return "None", "None", "None"
+    peak_i = wet["precipitation"].idxmax()
+    return wet.iloc[0]["time"], df.loc[peak_i,"time"], wet.iloc[-1]["time"]
+
+def arrow(delta, threshold):
+    if delta > threshold: return "↑"
+    if delta < -threshold: return "↓"
+    return "→"
+
 st.sidebar.title("DWG Intelligence")
 st.sidebar.caption("Data Over Drama")
 display_mode = st.sidebar.segmented_control("Display", ["☀️ Bright", "🌙 Dark"], default="☀️ Bright")
@@ -221,7 +250,8 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Workstation", [
-    "Command Center","Observations","Radar & Satellite","Forecast Guidance","Model Intelligence",
+    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite",
+    "Model Graphics","Model Battle Board","Forecast Guidance","Model Intelligence",
     "Model Trends","Hazards","Forecaster Desk","Verification","System Status"
 ])
 
@@ -274,6 +304,171 @@ if page == "Command Center":
         p = f["properties"]
         st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
 
+elif page == "Delaware Weather Wall":
+    st.header("🗺️ Delaware Weather Wall")
+    st.caption("One-screen situational awareness for the four DWG forecast zones.")
+
+    map_rows=[]
+    for zone,loc in LOCATIONS.items():
+        o=obs_data[zone]
+        map_rows.append({"lat":loc["lat"],"lon":loc["lon"],"Zone":zone,"Temperature":o["temp"] or 0,"Wind":o["wind"] or 0})
+    st.map(pd.DataFrame(map_rows), latitude="lat", longitude="lon", size=80, zoom=7)
+
+    cols=st.columns(4)
+    for col,(zone,loc) in zip(cols,LOCATIONS.items()):
+        o=obs_data[zone]
+        with col:
+            st.markdown('<div class="dwg-card">', unsafe_allow_html=True)
+            st.markdown(f"#### {zone}")
+            st.metric("Temperature",fmt(o["temp"],0,"°F"))
+            st.metric("Dewpoint",fmt(o["dew"],0,"°F"))
+            st.metric("Wind",fmt(o["wind"],0," mph"))
+            st.write(f"**Pressure:** {fmt(o['pressure'],1,' mb')}")
+            st.write(f"**Sky:** {o['text']}")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    st.subheader("Statewide 24-Hour Model Snapshot")
+    wall=[]
+    with st.spinner("Building Delaware model snapshot…"):
+        for zone in LOCATIONS:
+            frames=load_zone_models(zone,2)
+            for name in ["HRRR","RAP","GFS","ECMWF IFS","NBM"]:
+                if name in frames:
+                    sm=model_summary(frames[name])
+                    wall.append({"Zone":zone,"Model":name,"QPF":sm.get("qpf24"),"Peak Gust":sm.get("gust24"),"Temp":sm.get("temp_now")})
+    wdf=pd.DataFrame(wall)
+    if not wdf.empty:
+        zsum=wdf.groupby("Zone").agg({"QPF":"median","Peak Gust":"median","Temp":"median"}).reset_index()
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown("**Median 24h QPF by zone**")
+            st.bar_chart(zsum.set_index("Zone")[["QPF"]])
+        with c2:
+            st.markdown("**Median peak gust by zone**")
+            st.bar_chart(zsum.set_index("Zone")[["Peak Gust"]])
+        st.dataframe(zsum.rename(columns={"QPF":"24h QPF in","Peak Gust":"Peak Gust mph","Temp":"Temperature °F"}),use_container_width=True,hide_index=True)
+
+elif page == "Radar & Satellite":
+    st.header("📡 Radar & Satellite Lab")
+    st.caption("Live operational imagery with Delaware-focused viewing.")
+    radar_tab,sat_tab,split_tab=st.tabs(["Radar","Satellite","Split Screen"])
+    with radar_tab:
+        site=st.selectbox("Radar site",["KDOX — Dover, DE","KDIX — Philadelphia / Mt. Holly"],key="labsite")
+        rid=site.split(" ")[0]
+        st.image(f"https://radar.weather.gov/ridge/standard/{rid}_loop.gif",use_container_width=True)
+        st.caption("NOAA/NWS RIDGE base reflectivity loop.")
+        st.link_button("Open interactive NWS radar","https://radar.weather.gov/")
+    with sat_tab:
+        product=st.selectbox("GOES-East product",["GeoColor","Clean Longwave IR","Water Vapor"],key="labproduct")
+        band={"GeoColor":"GEOCOLOR","Clean Longwave IR":"13","Water Vapor":"09"}[product]
+        st.image(f"https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/{band}/1250x750.jpg",use_container_width=True)
+        st.caption(f"NOAA/NESDIS GOES-19 {product}.")
+    with split_tab:
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown("**KDOX Radar**")
+            st.image("https://radar.weather.gov/ridge/standard/KDOX_loop.gif",use_container_width=True)
+        with c2:
+            st.markdown("**GOES-19 GeoColor**")
+            st.image("https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg",use_container_width=True)
+
+elif page == "Model Graphics":
+    st.header("📈 Model Graphics Center")
+    st.caption("Time-series graphics for Delaware point guidance.")
+    zone=st.selectbox("Zone",list(LOCATIONS),key="graphicszone")
+    hours=st.select_slider("Forecast horizon",options=[12,24,36,48,72],value=48)
+    frames=load_zone_models(zone,3)
+    if not frames:
+        st.error("No model feeds returned on this refresh.")
+    else:
+        tabs=st.tabs(["Temperature","QPF","Wind Gust","Dewpoint","MSLP"])
+        specs=[
+            ("temperature_2m","Temperature °F",False),
+            ("precipitation","Hourly QPF in",True),
+            ("wind_gusts_10m","Wind gust mph",False),
+            ("dew_point_2m","Dewpoint °F",False),
+            ("pressure_msl","MSLP mb",False)
+        ]
+        for tab,(var,label,bars) in zip(tabs,specs):
+            with tab:
+                chart=pd.DataFrame()
+                for name,df in frames.items():
+                    p=current_future(df,hours)[["time",var]].set_index("time").rename(columns={var:name})
+                    chart=p if chart.empty else chart.join(p,how="outer")
+                st.markdown(f"### {label}")
+                if bars and len(chart.columns):
+                    st.line_chart(chart,use_container_width=True)
+                    st.caption("Each line is hourly model QPF; totals are summarized below.")
+                else:
+                    st.line_chart(chart,use_container_width=True)
+        st.subheader("Model Summary Cards")
+        cards=st.columns(min(3,max(1,len(frames))))
+        for i,(name,df) in enumerate(frames.items()):
+            sm=model_summary(df)
+            with cards[i%len(cards)]:
+                st.markdown('<div class="dwg-card">',unsafe_allow_html=True)
+                st.markdown(f"**{name}**")
+                st.write(f"24h QPF: **{fmt(sm.get('qpf24'),2,' in')}**")
+                st.write(f"Peak gust: **{fmt(sm.get('gust24'),0,' mph')}**")
+                st.write(f"Temperature: **{fmt(sm.get('temp_now'),0,'°F')}**")
+                st.markdown('</div>',unsafe_allow_html=True)
+
+elif page == "Model Battle Board":
+    st.header("⚔️ Model Battle Board")
+    st.caption("Consensus, spread, timing and outliers — one board.")
+    zone=st.selectbox("Zone",list(LOCATIONS),key="battlezone")
+    frames=load_zone_models(zone,3)
+    rows=[]
+    for name,df in frames.items():
+        sm=model_summary(df)
+        onset,peak,end=precip_timing(df)
+        rows.append({"Model":name,"24h QPF":sm.get("qpf24"),"Peak Gust":sm.get("gust24"),
+                     "Temp":sm.get("temp_now"),"Onset":onset,"Peak":peak,"End":end})
+    bdf=pd.DataFrame(rows)
+    if bdf.empty:
+        st.error("No model guidance returned.")
+    else:
+        det=bdf[bdf["Model"].isin(["HRRR","RAP","GFS","ECMWF IFS","NBM"])].copy()
+        qmed=det["24h QPF"].median()
+        gmed=det["Peak Gust"].median()
+        tmed=det["Temp"].median()
+        qs=det["24h QPF"].max()-det["24h QPF"].min()
+        gs=det["Peak Gust"].max()-det["Peak Gust"].min()
+        ts=det["Temp"].max()-det["Temp"].min()
+        score,label=confidence_from_spread(ts,gs,qs)
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("Consensus QPF",fmt(qmed,2," in"))
+        c2.metric("Consensus Gust",fmt(gmed,0," mph"))
+        c3.metric("Consensus Temp",fmt(tmed,0,"°F"))
+        c4.metric("Agreement",f"{score}/100",label)
+
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown("### QPF Battle")
+            st.bar_chart(det.set_index("Model")[["24h QPF"]])
+        with c2:
+            st.markdown("### Wind Battle")
+            st.bar_chart(det.set_index("Model")[["Peak Gust"]])
+
+        st.subheader("Timing Board")
+        show=bdf.copy()
+        for col in ["Onset","Peak","End"]:
+            show[col]=show[col].apply(lambda x: x.strftime("%a %I %p") if hasattr(x,"strftime") else x)
+        st.dataframe(show,use_container_width=True,hide_index=True)
+
+        st.subheader("Outlier Check")
+        notes=[]
+        if len(det)>=3:
+            for _,r in det.iterrows():
+                if abs(r["24h QPF"]-qmed) > max(.15,qs*.45):
+                    notes.append(f"{r['Model']} is an outlier on QPF ({r['24h QPF']:.2f} in vs {qmed:.2f} in median).")
+                if abs(r["Peak Gust"]-gmed) > max(5,gs*.45):
+                    notes.append(f"{r['Model']} is an outlier on gusts ({r['Peak Gust']:.0f} mph vs {gmed:.0f} mph median).")
+        if notes:
+            for n in notes: st.warning(n)
+        else:
+            st.success("No major deterministic outlier detected by the current spread rules.")
+
 elif page == "Observations":
     st.header("Surface Observations")
     rows = []
@@ -285,29 +480,6 @@ elif page == "Observations":
             "Gust mph":o["gust"],"MSLP mb":o["pressure"],"Conditions":o["text"]
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-elif page == "Radar & Satellite":
-    st.header("Live Radar & Satellite")
-    st.caption("Operational imagery links are refreshed by NOAA/NWS. Use the loops for situational awareness; official warnings remain in the Hazard Desk.")
-
-    radar_tab, sat_tab = st.tabs(["📡 NWS Radar", "🛰️ GOES-East Satellite"])
-
-    with radar_tab:
-        site = st.selectbox("Radar site", ["KDOX — Dover, DE", "KDIX — Philadelphia / Mt. Holly"], key="radarsite")
-        rid = site.split(" ")[0]
-        st.subheader(f"{rid} Base Reflectivity Loop")
-        st.image(f"https://radar.weather.gov/ridge/standard/{rid}_loop.gif", use_container_width=True)
-        st.caption("Source: NOAA/National Weather Service RIDGE radar imagery. Loop updates as the source image updates.")
-        st.link_button("Open full NWS Radar Viewer", "https://radar.weather.gov/")
-
-    with sat_tab:
-        product = st.selectbox("GOES-East product", ["GeoColor","Clean Longwave IR","Water Vapor"], key="satproduct")
-        band = {"GeoColor":"GEOCOLOR","Clean Longwave IR":"13","Water Vapor":"09"}[product]
-        image_url = f"https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/{band}/1250x750.jpg"
-        st.subheader(f"GOES-19 CONUS — {product}")
-        st.image(image_url, use_container_width=True)
-        st.caption("Source: NOAA/NESDIS/STAR GOES-19. GeoColor is true-color-like by day and multispectral IR at night.")
-        st.link_button("Open NOAA GOES Imagery Viewer", f"https://www.star.nesdis.noaa.gov/GOES/conus_band.php?band={band}&sat=G19")
 
 elif page == "Forecast Guidance":
     st.header("NWS Forecast Guidance")
@@ -505,7 +677,7 @@ elif page == "Forecaster Desk":
 elif page == "Verification":
     st.header("Forecast Verification")
     st.write("This workspace will compare issued DWG forecasts against observations and calculate bias, MAE, timing error and model performance.")
-    st.info("v0.2 adds live model comparison and trends. Persistent verification history is the next database upgrade.")
+    st.info("v0.3 adds the Weather Wall, Radar/Satellite Lab, Model Graphics Center and Model Battle Board. Persistent verification history remains the next database upgrade.")
     st.dataframe(pd.DataFrame([
         ["Temperature","MAE / Bias","Framework ready"],
         ["QPF","MAE / Bias / Hit range","Framework ready"],
@@ -524,8 +696,11 @@ elif page == "System Status":
     st.write("**ECMWF IFS comparison:** 🟢 v0.2")
     st.write("**NBM point guidance:** 🟢 v0.2")
     st.write("**Ensemble-mean guidance:** 🟢 v0.2")
-    st.write("**Run-to-run trend desk:** 🟢 v0.2")
+    st.write("**Run-to-run trend desk:** 🟢 v0.3")
     rap_native = nomads_rap_status()
     st.write("**NOAA/NCEP NOMADS RAP native feed:**", "🟢 Live" if rap_native["ok"] else "🔴 Unreachable this refresh")
     st.write("**Persistent database:** 🔵 Planned")
-    st.write("**NWS Radar / GOES-19 satellite panels:** 🟢 Live")
+    st.write("**Delaware Weather Wall:** 🟢 v0.3")
+    st.write("**Radar / Satellite Lab:** 🟢 v0.3")
+    st.write("**Model Graphics Center:** 🟢 v0.3")
+    st.write("**Model Battle Board:** 🟢 v0.3")
