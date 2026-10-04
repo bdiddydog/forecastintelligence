@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2.3a"
+APP_VERSION = "1.2.3b"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -624,7 +624,7 @@ elif page == "NOAA Discussions":
     if alerts:
         for feat in alerts:
             p=feat.get("properties",{})
-            with st.expander(f"{p.get(\'event\',\'Alert\')} — {p.get(\'headline\',\'\')}",expanded=True):
+            with st.expander(f"{p.get('event','Alert')} — {p.get('headline','')}",expanded=True):
                 st.write(p.get("description",""))
                 if p.get("instruction"): st.info(p.get("instruction"))
     else: st.success("No active Delaware NWS alerts.")
@@ -995,7 +995,7 @@ elif page == "Forecast Production":
         if snap["alerts"]:
             for feat in snap["alerts"][:8]:
                 p=feat.get("properties",{})
-                st.warning(f"**{p.get(\'event\',\'Alert\')}** — {p.get(\'headline\',\'\')}")
+                st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
         else: st.success("No active Delaware alerts returned by NWS.")
     with evidence_tabs[4]:
         cols=st.columns(4)
