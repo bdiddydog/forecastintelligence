@@ -700,42 +700,6 @@ elif page == "Models & Upper Air":
         else: st.warning("Model guidance unavailable.")
 
 elif page == "Weather Wall":
-    # Legacy Command Center content retained below but intentionally disabled.
-    if False:
-    a,b,c,d = st.columns(4)
-    a.metric("NWS Data", "LIVE" if live_ok else "DEMO/FALLBACK")
-    try:
-        alerts = delaware_alerts()
-        b.metric("Active DE Alerts", len(alerts))
-    except Exception:
-        alerts = []
-        b.metric("Active DE Alerts", "—")
-    c.metric("Forecast Zones", 4)
-    d.metric("Forecaster", "Brandon")
-
-    st.subheader("Delaware Now")
-    cols = st.columns(4)
-    for col,(zone,loc) in zip(cols,LOCATIONS.items()):
-        o = obs_data[zone]
-        with col:
-            st.markdown('<div class="dwg-card">', unsafe_allow_html=True)
-            st.markdown(f"### {zone}")
-            st.caption(f"{loc['city']} • {o['station']}")
-            st.metric("Temperature", fmt(o["temp"],0,"°F"))
-            st.write(f"**Dewpoint:** {fmt(o['dew'],0,'°F')}")
-            st.write(f"**Wind:** {fmt(o['wind'],0,' mph')} • Gust {fmt(o['gust'],0,' mph')}")
-            st.write(f"**MSLP:** {fmt(o['pressure'],1,' mb')}")
-            st.write(o["text"])
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    st.subheader("Official NWS Alerts")
-    if not alerts:
-        st.success("No active Delaware alerts returned.")
-    for f in alerts[:8]:
-        p = f["properties"]
-        st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
-
-elif page == "Weather Wall":
     st.header("🗺️ Delaware Weather Wall")
     st.caption("One-screen situational awareness for the four DWG forecast zones.")
 
