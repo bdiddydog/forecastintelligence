@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.4"
+APP_VERSION = "0.5"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -323,22 +323,62 @@ def arrow(delta, threshold):
     return "→"
 
 UPPER_LEVELS = [925,850,700,500,250]
+UPPER_MODELS = {
+    "GFS": "ncep_gfs_global",
+    "RAP": "ncep_rap_conus",
+}
+WDS_UPPER_FIELDS = {
+    925: ("925_temp_ht", "925mb Temperature and Heights"),
+    850: ("850_temp_ht", "850mb Temperature and Heights"),
+    700: ("700_rh_ht", "700mb Relative Humidity and Heights"),
+    500: ("500_vort_ht", "500mb Vorticity, Heights and Winds"),
+    250: ("250_wnd_ht", "250mb Wind and Heights"),
+}
+WDS_VORT_FIELDS = {
+    850: ("850_vort_ht", "850mb Vorticity and Heights"),
+    500: ("500_vort_ht", "500mb Vorticity, Heights and Winds"),
+}
 
 @st.cache_data(ttl=900)
-def upper_air_point(lat, lon, days=3):
+def upper_air_model(lat, lon, model_id, days=4):
     hourly=[]
     for lev in UPPER_LEVELS:
         hourly += [f"temperature_{lev}hPa",f"geopotential_height_{lev}hPa",
-                   f"wind_speed_{lev}hPa",f"wind_direction_{lev}hPa"]
-        if lev in [850,700]:
-            hourly.append(f"relative_humidity_{lev}hPa")
+                   f"wind_speed_{lev}hPa",f"wind_direction_{lev}hPa",
+                   f"relative_humidity_{lev}hPa"]
     params={"latitude":lat,"longitude":lon,"hourly":",".join(hourly),
-            "models":"ncep_gfs_global","forecast_days":days,
+            "models":model_id,"forecast_days":days,
             "temperature_unit":"fahrenheit","wind_speed_unit":"mph",
             "timezone":"America/New_York"}
-    data=get_json("https://api.open-meteo.com/v1/forecast",params=params,timeout=18)
+    data=get_json("https://api.open-meteo.com/v1/forecast",params=params,timeout=20)
     df=pd.DataFrame(data["hourly"]); df["time"]=pd.to_datetime(df["time"])
     return df
+
+def upper_air_snapshot(df, forecast_hour):
+    now_local=pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+    future=df[df["time"]>=now_local].reset_index(drop=True)
+    if future.empty:
+        future=df.reset_index(drop=True)
+    target=min(max(int(forecast_hour),0),len(future)-1)
+    row=future.iloc[target]
+    prior=future.iloc[max(0,target-6)]
+    return future,row,prior
+
+def upper_signal(row, prior, lev):
+    h=row.get(f"geopotential_height_{lev}hPa")
+    hp=prior.get(f"geopotential_height_{lev}hPa")
+    t=row.get(f"temperature_{lev}hPa")
+    tp=prior.get(f"temperature_{lev}hPa")
+    w=row.get(f"wind_speed_{lev}hPa")
+    dh=None if pd.isna(h) or pd.isna(hp) else h-hp
+    dt=None if pd.isna(t) or pd.isna(tp) else t-tp
+    height="steady"
+    if dh is not None and dh <= -15: height="falling"
+    elif dh is not None and dh >= 15: height="rising"
+    thermal="steady"
+    if dt is not None and dt <= -2: thermal="cooling"
+    elif dt is not None and dt >= 2: thermal="warming"
+    return dh,dt,height,thermal,w
 
 @st.cache_data(ttl=600)
 def gfs_vorticity_native_status():
@@ -575,54 +615,135 @@ elif page == "Radar & Satellite":
             st.image("https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg",use_container_width=True)
 
 elif page == "Upper Air":
-    st.header("🌐 Upper Air Analysis")
-    st.caption("GFS pressure-level guidance for Delaware plus direct NOAA/NCEP native vorticity access.")
-    zone=st.selectbox("Delaware zone",list(LOCATIONS),key="upperzone")
+    st.header("🌐 Forecast Intelligence Upper-Air Workstation")
+    st.caption("Operational pressure-level diagnosis for Delaware: GFS/RAP point guidance, trends, cross-level structure, and direct WDS model-chart access.")
+
+    c1,c2,c3=st.columns([1.2,1,1])
+    zone=c1.selectbox("Delaware zone",list(LOCATIONS),key="upperzone")
+    model_name=c2.selectbox("Model",list(UPPER_MODELS),key="uppermodel")
+    hour=c3.select_slider("Forecast hour",options=[0,3,6,9,12,18,24,30,36,48,60,72],value=0,key="upperhour")
     loc=LOCATIONS[zone]
-    hour=st.select_slider("Forecast hour",options=[0,6,12,18,24,36,48,60,72],value=0)
+
     try:
-        ua=upper_air_point(loc["lat"],loc["lon"],3)
-        now_local=pd.Timestamp.now(tz="America/New_York").tz_localize(None)
-        future=ua[ua["time"]>=now_local]
-        row=future.iloc[min(hour,len(future)-1)] if len(future) else ua.iloc[0]
+        ua=upper_air_model(loc["lat"],loc["lon"],UPPER_MODELS[model_name],4)
+        future,row,prior=upper_air_snapshot(ua,hour)
         valid=row["time"]
-        st.write(f"**Valid:** {valid:%A %b %d • %I:%M %p} ET")
-        tabs=st.tabs(["925 mb","850 mb","700 mb","500 mb","250 mb","Vorticity"])
+        st.markdown(f"### {model_name} • {zone}")
+        st.write(f"**Valid:** {valid:%A %b %d • %I:%M %p} ET  |  **Point:** {loc['city']}  |  **Forecast:** F{hour:03d}")
+
+        # Whole-column quick look
+        quick=[]
+        for lev in UPPER_LEVELS:
+            dh,dt,htrend,ttrend,w=upper_signal(row,prior,lev)
+            quick.append({
+                "Level":f"{lev} mb",
+                "Temp °F":row.get(f"temperature_{lev}hPa"),
+                "RH %":row.get(f"relative_humidity_{lev}hPa"),
+                "Height m":row.get(f"geopotential_height_{lev}hPa"),
+                "6h Height Δ m":dh,
+                "Wind mph":w,
+                "Wind Dir °":row.get(f"wind_direction_{lev}hPa"),
+                "Signal":f"{htrend} / {ttrend}"
+            })
+        qdf=pd.DataFrame(quick)
+        st.subheader("Atmospheric Column")
+        st.dataframe(qdf,use_container_width=True,hide_index=True)
+
+        tabs=st.tabs(["925 mb","850 mb","700 mb","500 mb","250 mb","Vorticity","Cross-Level"])
         notes={
-            925:"Low-level thermal field and boundary-layer flow.",
-            850:"Low-level temperature/advection and moisture transport.",
-            700:"Mid-level moisture and flow; useful for dry slots and forcing context.",
-            500:"Primary synoptic steering level; troughs, ridges and shortwaves.",
-            250:"Upper-level jet structure and high-level flow."
+            925:"Boundary-layer thermal structure and low-level flow. Watch temperature changes and wind for shallow cold/warm advection.",
+            850:"Low-level thermal advection and moisture transport. A key level for rain/snow thermal context and low-level jets.",
+            700:"Mid-level moisture and flow. Useful for dry slots, saturation, and the middle of the forcing column.",
+            500:"Core synoptic diagnosis: trough/ridge evolution, height falls/rises, shortwaves and vorticity structure.",
+            250:"Jet-level flow. Use wind speed/direction to diagnose jet placement and upper-level support."
         }
         for tab,lev in zip(tabs[:5],UPPER_LEVELS):
             with tab:
-                c1,c2,c3,c4=st.columns(4)
-                c1.metric("Temperature",fmt(row.get(f"temperature_{lev}hPa"),0,"°F"))
-                c2.metric("Height",fmt(row.get(f"geopotential_height_{lev}hPa"),0," m"))
-                c3.metric("Wind",fmt(row.get(f"wind_speed_{lev}hPa"),0," mph"))
-                c4.metric("Direction",fmt(row.get(f"wind_direction_{lev}hPa"),0,"°"))
-                if lev in [850,700]:
-                    st.metric("Relative Humidity",fmt(row.get(f"relative_humidity_{lev}hPa"),0,"%"))
+                dh,dt,htrend,ttrend,w=upper_signal(row,prior,lev)
+                m1,m2,m3,m4,m5=st.columns(5)
+                m1.metric("Temperature",fmt(row.get(f"temperature_{lev}hPa"),0,"°F"),
+                          None if dt is None else f"{dt:+.1f}°F / 6h")
+                m2.metric("RH",fmt(row.get(f"relative_humidity_{lev}hPa"),0,"%"))
+                m3.metric("Height",fmt(row.get(f"geopotential_height_{lev}hPa"),0," m"),
+                          None if dh is None else f"{dh:+.0f} m / 6h")
+                m4.metric("Wind",fmt(w,0," mph"))
+                m5.metric("Direction",fmt(row.get(f"wind_direction_{lev}hPa"),0,"°"))
                 st.info(notes[lev])
-                series=future.head(72)[["time",f"geopotential_height_{lev}hPa",f"wind_speed_{lev}hPa"]].set_index("time")
-                st.markdown("#### Height trend")
-                st.line_chart(series[[f"geopotential_height_{lev}hPa"]],use_container_width=True)
-                st.markdown("#### Wind trend")
-                st.line_chart(series[[f"wind_speed_{lev}hPa"]],use_container_width=True)
+
+                if htrend=="falling":
+                    st.warning(f"**Diagnostic:** {lev}-mb heights are falling over the prior 6 hours ({fmt(dh,0,' m')}); the local column is trending toward lower heights.")
+                elif htrend=="rising":
+                    st.success(f"**Diagnostic:** {lev}-mb heights are rising over the prior 6 hours ({fmt(dh,0,' m')}).")
+                else:
+                    st.write(f"**Diagnostic:** {lev}-mb heights are comparatively steady over the prior 6 hours.")
+
+                plot=future.head(73).set_index("time")
+                pc1,pc2=st.columns(2)
+                with pc1:
+                    st.markdown("#### Height evolution")
+                    st.line_chart(plot[[f"geopotential_height_{lev}hPa"]],use_container_width=True)
+                with pc2:
+                    st.markdown("#### Wind evolution")
+                    st.line_chart(plot[[f"wind_speed_{lev}hPa"]],use_container_width=True)
+
+                field_id,field_name=WDS_UPPER_FIELDS[lev]
+                st.markdown("#### WDS Model Chart")
+                st.caption(f"{field_name} • GFS CONUS chart in the 4070/WDS Model Explorer.")
+                st.link_button(f"Open {field_name}",
+                    f"https://portal.weatherdecisionsolutions.com/weather/model-explorer?model=gfs&map=conus&field={field_id}")
+
         with tabs[5]:
+            st.subheader("🌀 Vorticity Desk")
             native=gfs_vorticity_native_status()
-            st.subheader("Absolute Vorticity — Native GFS")
-            st.write("The native GFS secondary-variable GRIB2 feed carries **ABSV (absolute vorticity)** on pressure levels including 925, 850, 700, 500 and 250 mb.")
             if native["ok"]:
-                st.success(f"NOAA/NCEP native GFS vorticity feed reachable • catalog {native['date']}")
+                st.success(f"NOAA/NCEP native GFS secondary-field catalog reachable • {native['date']}")
             else:
-                st.warning("Native GFS vorticity catalog did not answer this refresh.")
-            st.markdown("**Operational emphasis:** 500-mb vorticity is the primary synoptic diagnostic here; 250 mb is better paired with jet/wind analysis, while 850/925 mb are usually more useful for thermal advection and low-level flow.")
-            st.link_button("Open NOAA GFS GRIB Filter","https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25b")
-            st.caption("Native vorticity field decoding/map rendering is intentionally separated from the lightweight point charts so the hosted app remains responsive.")
+                st.warning("Native GFS secondary-field catalog did not answer this refresh.")
+            st.write("The workstation does **not** invent vorticity from point guidance. Vorticity is treated as a mapped field and handed off to the WDS-rendered products or native NOAA GRIB2 source.")
+            vc1,vc2=st.columns(2)
+            for col,lev in zip([vc1,vc2],[500,850]):
+                with col:
+                    field_id,field_name=WDS_VORT_FIELDS[lev]
+                    st.markdown(f"### {lev} mb")
+                    st.write("Primary synoptic vorticity diagnosis." if lev==500 else "Lower-tropospheric vorticity / circulation diagnosis.")
+                    st.link_button(f"Open {field_name}",
+                        f"https://portal.weatherdecisionsolutions.com/weather/model-explorer?model=gfs&map=conus&field={field_id}",
+                        key=f"vort_{lev}")
+            st.link_button("NOAA GFS GRIB Filter","https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25b")
+            st.caption("WDS charts are opened in the source portal because its rendered image is session-generated rather than a stable public image URL.")
+
+        with tabs[6]:
+            st.subheader("🧭 Cross-Level Diagnosis")
+            st.caption("A compact vertical profile for the selected valid time. This is diagnostic guidance, not an automated forecast conclusion.")
+            profile=qdf.set_index("Level")
+            p1,p2=st.columns(2)
+            with p1:
+                st.markdown("#### Temperature by pressure level")
+                st.bar_chart(profile[["Temp °F"]])
+            with p2:
+                st.markdown("#### Wind by pressure level")
+                st.bar_chart(profile[["Wind mph"]])
+
+            h500=profile.loc["500 mb","6h Height Δ m"]
+            w250=profile.loc["250 mb","Wind mph"]
+            rh700=profile.loc["700 mb","RH %"]
+            rh850=profile.loc["850 mb","RH %"]
+            signals=[]
+            if pd.notna(h500):
+                signals.append(f"500-mb heights {'falling' if h500 < -15 else 'rising' if h500 > 15 else 'steady'} ({h500:+.0f} m / 6h)")
+            if pd.notna(w250):
+                signals.append(f"250-mb wind {w250:.0f} mph")
+            if pd.notna(rh700) and pd.notna(rh850):
+                signals.append(f"850/700-mb RH {rh850:.0f}% / {rh700:.0f}%")
+            st.markdown("**Current column signals:** " + " • ".join(signals))
+
+        st.divider()
+        st.subheader("Forecaster Notes")
+        st.text_area("Upper-air diagnosis / pattern notes",height=140,key=f"uanotes_{zone}_{model_name}")
+        st.caption("Use this area for your own trough/ridge placement, shortwave timing, jet coupling, thermal-advection and confidence notes.")
+
     except Exception as e:
-        st.error("Upper-air point guidance is temporarily unavailable.")
+        st.error(f"{model_name} upper-air guidance is temporarily unavailable for this refresh.")
         st.caption(str(e))
 
 elif page == "Discussion Desk":
@@ -1009,5 +1130,5 @@ elif page == "System Status":
     st.write("**Radar / Satellite Lab:** 🟢 v0.3")
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
-    st.write("**Upper Air Analysis:** 🟢 v0.4")
+    st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
     st.write("**Discussion Desk:** 🟢 v0.4")
