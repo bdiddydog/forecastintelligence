@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -922,14 +922,86 @@ elif page == "Hazards":
         st.success("No active Delaware NWS alerts returned.")
 
 elif page == "Forecast Production":
-    st.header("✍️ Daily Forecast Production Desk")
-    st.caption("Enter the forecast once in a consistent structure. The desk builds the decision table and a ready-to-edit post from the same information.")
+    st.header("✍️ Forecast Production Desk • v1.2")
+    st.caption("Live NOAA, observations and model consensus sit beside your forecast form. The machine supplies evidence; Brandon makes the forecast.")
+
+    @st.cache_data(ttl=300)
+    def production_snapshot():
+        snap={"obs":{},"models":{},"afd":None,"hwo":None,"alerts":[]}
+        for z,loc in LOCATIONS.items():
+            try: snap["obs"][z]=observation_explorer(loc["lat"],loc["lon"])
+            except Exception: snap["obs"][z]=None
+            try:
+                frames=load_zone_models(z,2)
+                vals=[]
+                for name,df in frames.items():
+                    sm=model_summary(df)
+                    vals.append({"Model":name,"QPF":sm.get("qpf24"),"Gust":sm.get("gust24"),"Temp":sm.get("temp_now")})
+                snap["models"][z]=vals
+            except Exception: snap["models"][z]=[]
+        try: snap["afd"]=nws_text_product("AFD")
+        except Exception: pass
+        try: snap["hwo"]=nws_text_product("HWO")
+        except Exception: pass
+        try: snap["alerts"]=delaware_alerts()
+        except Exception: pass
+        return snap
+
+    snap=production_snapshot()
+    st.markdown("### 📥 Live Forecast Evidence")
+    evidence_tabs=st.tabs(["Delaware Now","Model Consensus","AFD","HWO","Alerts","4070 Tools"])
+    with evidence_tabs[0]:
+        cols=st.columns(4)
+        for col,(z,loc) in zip(cols,LOCATIONS.items()):
+            o=snap["obs"].get(z)
+            with col:
+                st.markdown(f"**{loc['city']}**")
+                if o:
+                    st.metric("Temperature",fmt(o.get("temp"),0,"°F"))
+                    st.write(f"Dew {fmt(o.get('dew'),0,'°F')} • RH {fmt(o.get('rh'),0,'%')}")
+                    st.write(f"Wind {fmt(o.get('wind'),0,' mph')} • Gust {fmt(o.get('gust'),0,' mph')}")
+                    st.caption(f"{o.get('station','')} • {o.get('text','')}")
+                else: st.caption("Observation unavailable")
+    with evidence_tabs[1]:
+        z=st.segmented_control("Consensus area",list(LOCATIONS),default=list(LOCATIONS)[0],key="prod_cons_zone")
+        vals=snap["models"].get(z,[])
+        if vals:
+            mdf=pd.DataFrame(vals)
+            st.dataframe(mdf,use_container_width=True,hide_index=True)
+            nums=mdf.select_dtypes(include="number")
+            if not nums.empty:
+                med=nums.median(numeric_only=True)
+                c1,c2,c3=st.columns(3)
+                c1.metric("Median 24h QPF",fmt(med.get("QPF"),2," in"))
+                c2.metric("Median peak gust",fmt(med.get("Gust"),0," mph"))
+                c3.metric("Median temperature",fmt(med.get("Temp"),0,"°F"))
+        else: st.warning("Model consensus unavailable on this refresh.")
+    with evidence_tabs[2]:
+        st.text_area("Latest Mount Holly Area Forecast Discussion",snap["afd"]["text"] if snap["afd"] else "AFD unavailable.",height=420,key="prod_afd")
+    with evidence_tabs[3]:
+        st.text_area("Latest Mount Holly Hazardous Weather Outlook",snap["hwo"]["text"] if snap["hwo"] else "HWO unavailable.",height=420,key="prod_hwo")
+    with evidence_tabs[4]:
+        if snap["alerts"]:
+            for feat in snap["alerts"][:8]:
+                p=feat.get("properties",{})
+                st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
+        else: st.success("No active Delaware alerts returned by NWS.")
+    with evidence_tabs[5]:
+        cols=st.columns(4)
+        cols[0].link_button("4070 Radar",wds_portal_url("/radar"),use_container_width=True)
+        cols[1].link_button("Model Explorer",WDS_BASE,use_container_width=True)
+        cols[2].link_button("500 mb Vorticity",wds_model_url("gfs","conus","500_vort_ht"),use_container_width=True)
+        cols[3].link_button("NBM QPF",wds_model_url("nbm","conus","precip_ptot"),use_container_width=True)
+
+    st.divider()
+    st.markdown("### 🧠 Your Forecast")
     sections=["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"]
     tabs=st.tabs(sections)
     for tab,section in zip(tabs,sections):
         with tab:
             k=section.lower().replace(" ","_").replace("/","_")
             st.markdown(f"### {section}")
+            st.caption("Use the evidence above, then record your forecast decision here. These fields feed both the decision table and post draft.")
             a,b,c=st.columns(3)
             status=a.selectbox("Status",["🟢 Favorable","👀 Stay Weather-Aware","🟡 Monitoring","⚠️ Consider Adjustments","🔴 High Impact"],key=f"{k}_status")
             confidence=b.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key=f"{k}_conf")
@@ -945,21 +1017,24 @@ elif page == "Forecast Production":
                 trigger=st.text_area("Next trigger / review point",height=100,placeholder="What would make you change or escalate the forecast?",key=f"{k}_trigger")
                 poor=st.text_input("Questionable / least favorable period",placeholder="Sunday afternoon-evening",key=f"{k}_poor")
             guidance=st.text_area("Decision guidance",height=90,placeholder="What should the reader do with this forecast?",key=f"{k}_guidance")
-            north=st.text_input("Northern Delaware",key=f"{k}_north")
-            central=st.text_input("Central Delaware",key=f"{k}_central")
-            sussex=st.text_input("Inland Sussex",key=f"{k}_sussex")
-            beaches=st.text_input("Delaware Beaches",key=f"{k}_beaches")
+            st.markdown("#### Delaware Differences")
+            d1,d2=st.columns(2)
+            north=d1.text_input("Northern Delaware",key=f"{k}_north")
+            central=d1.text_input("Central Delaware",key=f"{k}_central")
+            sussex=d2.text_input("Inland Sussex",key=f"{k}_sussex")
+            beaches=d2.text_input("Delaware Beaches",key=f"{k}_beaches")
             take=st.text_area("Brandon's Take",height=100,key=f"{k}_take")
 
             table=pd.DataFrame([
-                {"Category":"Overall","Status":status,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
-                {"Category":"Northern Delaware","Status":north,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
-                {"Category":"Central Delaware","Status":central,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
-                {"Category":"Inland Sussex","Status":sussex,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
-                {"Category":"Delaware Beaches","Status":beaches,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+                {"Category":"Overall","Status":status,"Best usable period":best,"Questionable / least favorable period":poor,"Confidence":confidence,"Decision guidance":guidance},
+                {"Category":"Northern Delaware","Status":north,"Best usable period":best,"Questionable / least favorable period":poor,"Confidence":confidence,"Decision guidance":guidance},
+                {"Category":"Central Delaware","Status":central,"Best usable period":best,"Questionable / least favorable period":poor,"Confidence":confidence,"Decision guidance":guidance},
+                {"Category":"Inland Sussex","Status":sussex,"Best usable period":best,"Questionable / least favorable period":poor,"Confidence":confidence,"Decision guidance":guidance},
+                {"Category":"Delaware Beaches","Status":beaches,"Best usable period":best,"Questionable / least favorable period":poor,"Confidence":confidence,"Decision guidance":guidance},
             ])
-            st.markdown("#### Decision Table Preview")
+            st.markdown("#### 📋 Decision Table")
             st.dataframe(table,use_container_width=True,hide_index=True)
+
             post=f"""**{headline or section}**
 
 {status} • **Confidence:** {confidence}
@@ -977,16 +1052,28 @@ elif page == "Forecast Production":
 • Northern Delaware: {north}
 • Central Delaware: {central}
 • Inland Sussex: {sussex}
-• Beaches: {beaches}
+• Delaware Beaches: {beaches}
 
 **Next review point:** {trigger}
 
 **Brandon's Take:** {take}"""
-            st.markdown("#### Post Draft Preview")
-            st.text_area("Ready-to-edit post",post,height=360,key=f"{k}_post_preview")
-            if st.button(f"Save {section} draft",key=f"save_{k}",type="primary"):
-                st.session_state.setdefault("forecast_production",{})[section]={"saved":datetime.now(timezone.utc).isoformat(),"table":table.to_dict("records"),"post":post}
+            st.markdown("#### 📰 Post Builder")
+            edited_post=st.text_area("Ready-to-edit post",post,height=360,key=f"{k}_post_preview")
+            bc1,bc2=st.columns(2)
+            if bc1.button(f"Save {section} draft",key=f"save_{k}",type="primary",use_container_width=True):
+                st.session_state.setdefault("forecast_production",{})[section]={"saved":datetime.now(timezone.utc).isoformat(),"table":table.to_dict("records"),"post":edited_post}
                 st.success("Draft saved for this browser session.")
+            bc2.download_button("Download post (.txt)",edited_post,file_name=f"{k}_forecast.txt",mime="text/plain",key=f"dl_{k}",use_container_width=True)
+
+    if st.session_state.get("forecast_production"):
+        st.divider()
+        st.markdown("### 🗂️ Today's Saved Forecast Package")
+        saved=st.session_state["forecast_production"]
+        st.write(f"**Completed sections:** {len(saved)} of {len(sections)}")
+        st.progress(len(saved)/len(sections))
+        for name,item in saved.items():
+            with st.expander(f"✓ {name}"):
+                st.markdown(item["post"])
 
 elif page == "Verification":
     st.header("Forecast Verification")
@@ -1020,5 +1107,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**4070 Forecast Workstation:** 🟢 v1.1 — animated satellite, E-Wall, structured Forecast Production Desk")
+    st.write("**4070 Forecast Workstation:** 🟢 v1.2 — live evidence + structured forecast production + post builder")
     st.write("**Discussion Desk:** 🟢 v0.4")
