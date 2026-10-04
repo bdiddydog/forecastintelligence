@@ -13,7 +13,23 @@ LOCATIONS = {
     "Inland Sussex": {"city":"Georgetown","lat":38.6901,"lon":-75.3855},
     "Delaware Beaches": {"city":"Rehoboth Beach","lat":38.7209,"lon":-75.0760},
 }
-HEADERS = {"User-Agent": "DWG-Forecast-Intelligence/0.2 contact: Delaware Weather Guy"}
+DELAWARE_CITIES = {
+    "Wilmington": (39.7391,-75.5398),
+    "Newark": (39.6837,-75.7497),
+    "New Castle": (39.6621,-75.5663),
+    "Middletown": (39.4496,-75.7163),
+    "Smyrna": (39.2998,-75.6046),
+    "Dover": (39.1582,-75.5244),
+    "Harrington": (38.9237,-75.5777),
+    "Milford": (38.9126,-75.4283),
+    "Seaford": (38.6412,-75.6110),
+    "Georgetown": (38.6901,-75.3855),
+    "Lewes": (38.7746,-75.1393),
+    "Rehoboth Beach": (38.7209,-75.0760),
+    "Bethany Beach": (38.5396,-75.0552),
+    "Fenwick Island": (38.4604,-75.0541),
+}
+HEADERS = {"User-Agent": "DWG-Forecast-Intelligence/0.3 contact: Delaware Weather Guy"}
 
 MODEL_CONFIG = {
     "HRRR": {"id":"ncep_hrrr_conus", "role":"3-km short range", "cadence":"Hourly"},
@@ -96,6 +112,84 @@ def forecast(lat, lon):
 @st.cache_data(ttl=120)
 def delaware_alerts():
     return get_json("https://api.weather.gov/alerts/active?area=DE")["features"]
+
+@st.cache_data(ttl=180)
+def observation_explorer(lat, lon):
+    meta = point_metadata(lat, lon)
+    stations = get_json(meta["properties"]["observationStations"])["features"]
+    if not stations:
+        return None
+    station = stations[0]
+    sid = station["properties"]["stationIdentifier"]
+    slat, slon = station["geometry"]["coordinates"][1], station["geometry"]["coordinates"][0]
+    p = get_json(f"https://api.weather.gov/stations/{sid}/observations/latest")["properties"]
+
+    def val(item):
+        return None if not item else item.get("value")
+    def ctof(v):
+        return None if v is None else v*9/5+32
+    def mph(item):
+        v=val(item)
+        if v is None: return None
+        unit=item.get("unitCode","")
+        if "km_h-1" in unit: return v*0.621371
+        if "m_s-1" in unit: return v*2.23694
+        return v
+    def mb(item):
+        v=val(item)
+        if v is None: return None
+        return v/100 if item.get("unitCode","").endswith(":Pa") else v
+    def miles(item):
+        v=val(item)
+        if v is None: return None
+        unit=item.get("unitCode","")
+        return v/1609.344 if unit.endswith(":m") else v
+    def rh_from_td(t,td):
+        if t is None or td is None: return None
+        import math
+        return 100*math.exp((17.625*td)/(243.04+td))/math.exp((17.625*t)/(243.04+t))
+    def distance_miles(a,b,c,d):
+        import math
+        R=3958.8
+        p1,p2=math.radians(a),math.radians(c)
+        dp=math.radians(c-a); dl=math.radians(d-b)
+        h=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+        return 2*R*math.asin(math.sqrt(h))
+
+    tc=val(p.get("temperature")); dc=val(p.get("dewpoint"))
+    ts=p.get("timestamp")
+    age=None
+    if ts:
+        try:
+            age=max(0,int((datetime.now(timezone.utc)-datetime.fromisoformat(ts.replace("Z","+00:00"))).total_seconds()/60))
+        except Exception: pass
+    pressure=p.get("seaLevelPressure")
+    if not pressure or val(pressure) is None:
+        pressure=p.get("barometricPressure")
+    return {
+        "station":sid,
+        "station_name":station["properties"].get("name",sid),
+        "distance":distance_miles(lat,lon,slat,slon),
+        "temp":ctof(tc),"dew":ctof(dc),"rh":rh_from_td(tc,dc),
+        "wind":mph(p.get("windSpeed")),"gust":mph(p.get("windGust")),
+        "dir":val(p.get("windDirection")),"pressure":mb(pressure),
+        "visibility":miles(p.get("visibility")),
+        "conditions":p.get("textDescription") or "—","time":ts,"age":age,
+        "station_lat":slat,"station_lon":slon
+    }
+
+@st.cache_data(ttl=300)
+def station_recent_observations(station_id):
+    data=get_json(f"https://api.weather.gov/stations/{station_id}/observations?limit=12")
+    rows=[]
+    for feat in data.get("features",[]):
+        p=feat["properties"]
+        t=p.get("temperature",{}).get("value")
+        d=p.get("dewpoint",{}).get("value")
+        if t is not None:
+            rows.append({"time":pd.to_datetime(p.get("timestamp")),"Temperature":t*9/5+32,
+                         "Dewpoint":None if d is None else d*9/5+32})
+    return pd.DataFrame(rows).sort_values("time") if rows else pd.DataFrame()
 
 @st.cache_data(ttl=900)
 def model_forecast(lat, lon, model_id, days=3):
@@ -326,6 +420,60 @@ elif page == "Delaware Weather Wall":
             st.write(f"**Pressure:** {fmt(o['pressure'],1,' mb')}")
             st.write(f"**Sky:** {o['text']}")
             st.markdown('</div>', unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("📍 Live Observation Explorer")
+    st.caption("Choose a Delaware community. The explorer finds the nearest NWS observation station and tells you exactly where the reading came from.")
+
+    ec1,ec2=st.columns([1,2])
+    with ec1:
+        city=st.selectbox("Check a location",list(DELAWARE_CITIES),key="obscity")
+        clat,clon=DELAWARE_CITIES[city]
+        try:
+            ex=observation_explorer(clat,clon)
+        except Exception:
+            ex=None
+
+        if ex:
+            freshness="Fresh"
+            if ex["age"] is not None and ex["age"]>60: freshness="Old"
+            elif ex["age"] is not None and ex["age"]>30: freshness="Aging"
+            st.markdown(f"### {city}")
+            st.write(f"**Nearest station:** {ex['station']} — {ex['station_name']}")
+            st.write(f"**Distance:** {ex['distance']:.1f} miles")
+            st.write(f"**Observation age:** {ex['age']} min • {freshness}" if ex["age"] is not None else "**Observation age:** unavailable")
+        else:
+            st.error("The NWS observation feed did not return a station for this location.")
+
+    with ec2:
+        if ex:
+            r1=st.columns(4)
+            r1[0].metric("Temperature",fmt(ex["temp"],0,"°F"))
+            r1[1].metric("Dewpoint",fmt(ex["dew"],0,"°F"))
+            r1[2].metric("Humidity",fmt(ex["rh"],0,"%"))
+            r1[3].metric("Visibility",fmt(ex["visibility"],1," mi"))
+            r2=st.columns(4)
+            r2[0].metric("Wind",fmt(ex["wind"],0," mph"))
+            r2[1].metric("Gust",fmt(ex["gust"],0," mph"))
+            r2[2].metric("Direction",fmt(ex["dir"],0,"°"))
+            r2[3].metric("Pressure",fmt(ex["pressure"],1," mb"))
+            st.info(f"**Current conditions:** {ex['conditions']}")
+
+    if ex:
+        try:
+            recent=station_recent_observations(ex["station"])
+            if not recent.empty:
+                st.markdown("#### Recent Temperature / Dewpoint Trend")
+                st.line_chart(recent.set_index("time")[["Temperature","Dewpoint"]],use_container_width=True)
+        except Exception:
+            st.caption("Recent trend data is temporarily unavailable.")
+
+        station_map=pd.DataFrame([
+            {"lat":clat,"lon":clon,"Location":city},
+            {"lat":ex["station_lat"],"lon":ex["station_lon"],"Location":ex["station"]}
+        ])
+        st.caption("Map shows the selected community and its reporting observation station.")
+        st.map(station_map,latitude="lat",longitude="lon",size=90,zoom=9)
 
     st.subheader("Statewide 24-Hour Model Snapshot")
     wall=[]
@@ -701,6 +849,7 @@ elif page == "System Status":
     st.write("**NOAA/NCEP NOMADS RAP native feed:**", "🟢 Live" if rap_native["ok"] else "🔴 Unreachable this refresh")
     st.write("**Persistent database:** 🔵 Planned")
     st.write("**Delaware Weather Wall:** 🟢 v0.3")
+    st.write("**Live Observation Explorer:** 🟢 v0.3")
     st.write("**Radar / Satellite Lab:** 🟢 v0.3")
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
