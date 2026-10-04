@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -1002,6 +1002,14 @@ elif page == "Forecast Production":
             k=section.lower().replace(" ","_").replace("/","_")
             st.markdown(f"### {section}")
             st.caption("Use the evidence above, then record your forecast decision here. These fields feed both the decision table and post draft.")
+            state_key=f"{k}_workflow_state"
+            default_state="Working" if section=="Daily Forecast" else "Not Needed"
+            workflow_state=st.segmented_control(
+                "Section status",
+                ["Not Needed","Working","Complete"],
+                default=st.session_state.get(state_key,default_state),
+                key=state_key
+            )
             a,b,c=st.columns(3)
             status=a.selectbox("Status",["🟢 Favorable","👀 Stay Weather-Aware","🟡 Monitoring","⚠️ Consider Adjustments","🔴 High Impact"],key=f"{k}_status")
             confidence=b.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key=f"{k}_conf")
@@ -1070,15 +1078,36 @@ elif page == "Forecast Production":
             bc1,bc2=st.columns(2)
             if bc1.button(f"Save {section} draft",key=f"save_{k}",type="primary",use_container_width=True):
                 st.session_state.setdefault("forecast_production",{})[section]={"saved":datetime.now(timezone.utc).isoformat(),"table":table.to_dict("records"),"post":edited_post}
-                st.success("Draft saved for this browser session.")
+                st.session_state[state_key]="Complete"
+                st.success("Draft saved and section marked Complete.")
             bc2.download_button("Download post (.txt)",edited_post,file_name=f"{k}_forecast.txt",mime="text/plain",key=f"dl_{k}",use_container_width=True)
 
-    if st.session_state.get("forecast_production"):
-        st.divider()
-        st.markdown("### 🗂️ Today's Saved Forecast Package")
-        saved=st.session_state["forecast_production"]
-        st.write(f"**Completed sections:** {len(saved)} of {len(sections)}")
-        st.progress(len(saved)/len(sections))
+    st.divider()
+    st.markdown("### 🗂️ Today's Forecast Package")
+    saved=st.session_state.get("forecast_production",{})
+    status_rows=[]
+    required=0
+    complete=0
+    for section in sections:
+        k=section.lower().replace(" ","_").replace("/","_")
+        state=st.session_state.get(f"{k}_workflow_state","Working" if section=="Daily Forecast" else "Not Needed")
+        if section in saved and state=="Working":
+            state="Complete"
+        if state!="Not Needed":
+            required+=1
+        if state=="Complete":
+            complete+=1
+        icon={"Complete":"✅","Working":"🟡","Not Needed":"⚪"}[state]
+        status_rows.append({"Section":section,"Status":f"{icon} {state}"})
+    if required and complete==required:
+        st.success("Daily forecast package ready.")
+    elif required:
+        st.info(f"{complete} of {required} active forecast sections complete.")
+    else:
+        st.info("No forecast sections are currently marked as needed.")
+    st.dataframe(pd.DataFrame(status_rows),use_container_width=True,hide_index=True)
+    if saved:
+        st.markdown("#### Saved Products")
         for name,item in saved.items():
             with st.expander(f"✓ {name}"):
                 st.markdown(item["post"])
