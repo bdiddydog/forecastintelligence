@@ -700,7 +700,8 @@ elif page == "Models & Upper Air":
         else: st.warning("Model guidance unavailable.")
 
 elif page == "Weather Wall":
-if False:
+    # Legacy Command Center content retained below but intentionally disabled.
+    if False:
     a,b,c,d = st.columns(4)
     a.metric("NWS Data", "LIVE" if live_ok else "DEMO/FALLBACK")
     try:
