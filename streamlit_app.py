@@ -47,17 +47,43 @@ def current_observation(lat, lon):
     station_id = stations[0]["properties"]["stationIdentifier"]
     obs = get_json(f"https://api.weather.gov/stations/{station_id}/observations/latest")
     p = obs["properties"]
-    def c_to_f(v): return None if v is None else v*9/5+32
-    def ms_to_mph(v): return None if v is None else v*2.23694
-    def pa_to_mb(v): return None if v is None else v/100
+    def c_to_f(v):
+        return None if v is None else v*9/5+32
+
+    def speed_to_mph(item):
+        if not item or item.get("value") is None:
+            return None
+        v = item["value"]
+        unit = item.get("unitCode", "")
+        if "km_h-1" in unit:
+            return v * 0.621371
+        if "m_s-1" in unit:
+            return v * 2.23694
+        if "mi_h-1" in unit:
+            return v
+        return v
+
+    def pressure_to_mb(item):
+        if not item or item.get("value") is None:
+            return None
+        v = item["value"]
+        unit = item.get("unitCode", "")
+        if unit.endswith(":Pa"):
+            return v / 100
+        if "hPa" in unit:
+            return v
+        return v
+
+    pressure_item = p.get("seaLevelPressure") or p.get("barometricPressure")
+
     return {
         "station": station_id,
         "temp": c_to_f(p["temperature"]["value"]),
         "dew": c_to_f(p["dewpoint"]["value"]),
-        "wind": ms_to_mph(p["windSpeed"]["value"]),
-        "gust": ms_to_mph(p["windGust"]["value"]),
+        "wind": speed_to_mph(p.get("windSpeed")),
+        "gust": speed_to_mph(p.get("windGust")),
         "dir": p["windDirection"]["value"],
-        "pressure": pa_to_mb(p["seaLevelPressure"]["value"]),
+        "pressure": pressure_to_mb(pressure_item),
         "text": p.get("textDescription") or "—",
         "time": p.get("timestamp"),
     }
