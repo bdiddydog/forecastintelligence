@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -524,7 +524,7 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 
 page = st.sidebar.radio("Forecast Intelligence", [
     "Morning Desk","4070 Launchpad","NOAA Discussions","Delaware Forecasts","Radar & Satellite",
-    "Models & Upper Air","Weather Wall","Discussion Desk","Hazards","Forecaster Desk","System Status"
+    "Models & Upper Air","E-Wall","Forecast Production","Discussion Desk","Hazards","System Status"
 ])
 
 now = datetime.now(ZoneInfo("America/New_York"))
@@ -699,509 +699,51 @@ elif page == "Models & Upper Air":
         if rows: st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
         else: st.warning("Model guidance unavailable.")
 
-elif page == "Weather Wall":
-    st.header("🗺️ Delaware Weather Wall")
-    st.caption("One-screen situational awareness for the four DWG forecast zones.")
-
-    map_rows=[]
-    for zone,loc in LOCATIONS.items():
-        o=obs_data[zone]
-        map_rows.append({"lat":loc["lat"],"lon":loc["lon"],"Zone":zone,"Temperature":o["temp"] or 0,"Wind":o["wind"] or 0})
-    st.map(pd.DataFrame(map_rows), latitude="lat", longitude="lon", size=80, zoom=7)
-
-    cols=st.columns(4)
-    for col,(zone,loc) in zip(cols,LOCATIONS.items()):
-        o=obs_data[zone]
-        with col:
-            st.markdown('<div class="dwg-card">', unsafe_allow_html=True)
-            st.markdown(f"#### {zone}")
-            st.metric("Temperature",fmt(o["temp"],0,"°F"))
-            st.metric("Dewpoint",fmt(o["dew"],0,"°F"))
-            st.metric("Wind",fmt(o["wind"],0," mph"))
-            st.write(f"**Pressure:** {fmt(o['pressure'],1,' mb')}")
-            st.write(f"**Sky:** {o['text']}")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    st.divider()
-    st.subheader("📍 Live Observation Explorer")
-    st.caption("Choose a Delaware community. The explorer finds the nearest NWS observation station and tells you exactly where the reading came from.")
-
-    ec1,ec2=st.columns([1,2])
-    with ec1:
-        city=st.selectbox("Check a location",list(DELAWARE_CITIES),key="obscity")
-        clat,clon=DELAWARE_CITIES[city]
-        try:
-            ex=observation_explorer(clat,clon)
-        except Exception:
-            ex=None
-
-        if ex:
-            freshness="Fresh"
-            if ex["age"] is not None and ex["age"]>60: freshness="Old"
-            elif ex["age"] is not None and ex["age"]>30: freshness="Aging"
-            st.markdown(f"### {city}")
-            st.write(f"**Nearest station:** {ex['station']} — {ex['station_name']}")
-            st.write(f"**Distance:** {ex['distance']:.1f} miles")
-            st.write(f"**Observation age:** {ex['age']} min • {freshness}" if ex["age"] is not None else "**Observation age:** unavailable")
-        else:
-            st.error("The NWS observation feed did not return a station for this location.")
-
-    with ec2:
-        if ex:
-            r1=st.columns(4)
-            r1[0].metric("Temperature",fmt(ex["temp"],0,"°F"))
-            r1[1].metric("Dewpoint",fmt(ex["dew"],0,"°F"))
-            r1[2].metric("Humidity",fmt(ex["rh"],0,"%"))
-            r1[3].metric("Visibility",fmt(ex["visibility"],1," mi"))
-            r2=st.columns(4)
-            r2[0].metric("Wind",fmt(ex["wind"],0," mph"))
-            r2[1].metric("Gust",fmt(ex["gust"],0," mph"))
-            r2[2].metric("Direction",fmt(ex["dir"],0,"°"))
-            r2[3].metric("Pressure",fmt(ex["pressure"],1," mb"))
-            st.info(f"**Current conditions:** {ex['conditions']}")
-
-    if ex:
-        try:
-            recent=station_recent_observations(ex["station"])
-            if not recent.empty:
-                st.markdown("#### Recent Temperature / Dewpoint Trend")
-                st.line_chart(recent.set_index("time")[["Temperature","Dewpoint"]],use_container_width=True)
-        except Exception:
-            st.caption("Recent trend data is temporarily unavailable.")
-
-        station_map=pd.DataFrame([
-            {"lat":clat,"lon":clon,"Location":city},
-            {"lat":ex["station_lat"],"lon":ex["station_lon"],"Location":ex["station"]}
-        ])
-        st.caption("Map shows the selected community and its reporting observation station.")
-        st.map(station_map,latitude="lat",longitude="lon",size=90,zoom=9)
-
-    st.subheader("Statewide 24-Hour Model Snapshot")
-    wall=[]
-    with st.spinner("Building Delaware model snapshot…"):
-        for zone in LOCATIONS:
-            frames=load_zone_models(zone,2)
-            for name in ["HRRR","RAP","GFS","ECMWF IFS","NBM"]:
-                if name in frames:
-                    sm=model_summary(frames[name])
-                    wall.append({"Zone":zone,"Model":name,"QPF":sm.get("qpf24"),"Peak Gust":sm.get("gust24"),"Temp":sm.get("temp_now")})
-    wdf=pd.DataFrame(wall)
-    if not wdf.empty:
-        zsum=wdf.groupby("Zone").agg({"QPF":"median","Peak Gust":"median","Temp":"median"}).reset_index()
-        c1,c2=st.columns(2)
-        with c1:
-            st.markdown("**Median 24h QPF by zone**")
-            st.bar_chart(zsum.set_index("Zone")[["QPF"]])
-        with c2:
-            st.markdown("**Median peak gust by zone**")
-            st.bar_chart(zsum.set_index("Zone")[["Peak Gust"]])
-        st.dataframe(zsum.rename(columns={"QPF":"24h QPF in","Peak Gust":"Peak Gust mph","Temp":"Temperature °F"}),use_container_width=True,hide_index=True)
-
-elif page == "Radar & Satellite":
-    st.header("📡 Radar & Satellite Lab")
-    st.caption("Live operational imagery with Delaware-focused viewing.")
-    radar_tab,sat_tab,split_tab=st.tabs(["Radar","Satellite","Split Screen"])
-    with radar_tab:
-        site=st.selectbox("Radar site",["KDOX — Dover, DE","KDIX — Philadelphia / Mt. Holly"],key="labsite")
-        rid=site.split(" ")[0]
-        st.image(f"https://radar.weather.gov/ridge/standard/{rid}_loop.gif",use_container_width=True)
-        st.caption("NOAA/NWS RIDGE base reflectivity loop.")
-        st.link_button("Open interactive NWS radar","https://radar.weather.gov/")
-    with sat_tab:
-        product=st.selectbox("GOES-East product",["GeoColor","Clean Longwave IR","Water Vapor"],key="labproduct")
-        band={"GeoColor":"GEOCOLOR","Clean Longwave IR":"13","Water Vapor":"09"}[product]
-        st.image(f"https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/{band}/1250x750.jpg",use_container_width=True)
-        st.caption(f"NOAA/NESDIS GOES-19 {product}.")
-    with split_tab:
-        c1,c2=st.columns(2)
-        with c1:
-            st.markdown("**KDOX Radar**")
-            st.image("https://radar.weather.gov/ridge/standard/KDOX_loop.gif",use_container_width=True)
-        with c2:
-            st.markdown("**GOES-19 GeoColor**")
-            st.image("https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg",use_container_width=True)
-
-elif page == "Upper Air":
-    st.header("🌐 Forecast Intelligence Upper-Air Workstation")
-    st.caption("Operational pressure-level diagnosis for Delaware: GFS/RAP point guidance, trends, cross-level structure, and direct WDS model-chart access.")
-
-    c1,c2,c3=st.columns([1.2,1,1])
-    zone=c1.selectbox("Delaware zone",list(LOCATIONS),key="upperzone")
-    model_name=c2.selectbox("Model",list(UPPER_MODELS),key="uppermodel")
-    hour=c3.select_slider("Forecast hour",options=[0,3,6,9,12,18,24,30,36,48,60,72],value=0,key="upperhour")
-    loc=LOCATIONS[zone]
-
-    try:
-        ua=upper_air_model(loc["lat"],loc["lon"],UPPER_MODELS[model_name],4)
-        future,row,prior=upper_air_snapshot(ua,hour)
-        valid=row["time"]
-        st.markdown(f"### {model_name} • {zone}")
-        st.write(f"**Valid:** {valid:%A %b %d • %I:%M %p} ET  |  **Point:** {loc['city']}  |  **Forecast:** F{hour:03d}")
-
-        # Whole-column quick look
-        quick=[]
-        for lev in UPPER_LEVELS:
-            dh,dt,htrend,ttrend,w=upper_signal(row,prior,lev)
-            quick.append({
-                "Level":f"{lev} mb",
-                "Temp °F":row.get(f"temperature_{lev}hPa"),
-                "RH %":row.get(f"relative_humidity_{lev}hPa"),
-                "Height m":row.get(f"geopotential_height_{lev}hPa"),
-                "6h Height Δ m":dh,
-                "Wind mph":w,
-                "Wind Dir °":row.get(f"wind_direction_{lev}hPa"),
-                "Signal":f"{htrend} / {ttrend}"
-            })
-        qdf=pd.DataFrame(quick)
-        st.subheader("Atmospheric Column")
-        st.dataframe(qdf,use_container_width=True,hide_index=True)
-
-        tabs=st.tabs(["925 mb","850 mb","700 mb","500 mb","250 mb","Vorticity","Cross-Level"])
-        notes={
-            925:"Boundary-layer thermal structure and low-level flow. Watch temperature changes and wind for shallow cold/warm advection.",
-            850:"Low-level thermal advection and moisture transport. A key level for rain/snow thermal context and low-level jets.",
-            700:"Mid-level moisture and flow. Useful for dry slots, saturation, and the middle of the forcing column.",
-            500:"Core synoptic diagnosis: trough/ridge evolution, height falls/rises, shortwaves and vorticity structure.",
-            250:"Jet-level flow. Use wind speed/direction to diagnose jet placement and upper-level support."
-        }
-        for tab,lev in zip(tabs[:5],UPPER_LEVELS):
-            with tab:
-                dh,dt,htrend,ttrend,w=upper_signal(row,prior,lev)
-                m1,m2,m3,m4,m5=st.columns(5)
-                m1.metric("Temperature",fmt(row.get(f"temperature_{lev}hPa"),0,"°F"),
-                          None if dt is None else f"{dt:+.1f}°F / 6h")
-                m2.metric("RH",fmt(row.get(f"relative_humidity_{lev}hPa"),0,"%"))
-                m3.metric("Height",fmt(row.get(f"geopotential_height_{lev}hPa"),0," m"),
-                          None if dh is None else f"{dh:+.0f} m / 6h")
-                m4.metric("Wind",fmt(w,0," mph"))
-                m5.metric("Direction",fmt(row.get(f"wind_direction_{lev}hPa"),0,"°"))
-                st.info(notes[lev])
-
-                if htrend=="falling":
-                    st.warning(f"**Diagnostic:** {lev}-mb heights are falling over the prior 6 hours ({fmt(dh,0,' m')}); the local column is trending toward lower heights.")
-                elif htrend=="rising":
-                    st.success(f"**Diagnostic:** {lev}-mb heights are rising over the prior 6 hours ({fmt(dh,0,' m')}).")
-                else:
-                    st.write(f"**Diagnostic:** {lev}-mb heights are comparatively steady over the prior 6 hours.")
-
-                plot=future.head(73).set_index("time")
-                pc1,pc2=st.columns(2)
-                with pc1:
-                    st.markdown("#### Height evolution")
-                    st.line_chart(plot[[f"geopotential_height_{lev}hPa"]],use_container_width=True)
-                with pc2:
-                    st.markdown("#### Wind evolution")
-                    st.line_chart(plot[[f"wind_speed_{lev}hPa"]],use_container_width=True)
-
-                field_id,field_name=WDS_UPPER_FIELDS[lev]
-                st.markdown("#### WDS Model Chart")
-                st.caption(f"{field_name} • GFS CONUS chart in the 4070/WDS Model Explorer.")
-                st.link_button(f"Open {field_name}",
-                    f"https://portal.weatherdecisionsolutions.com/weather/model-explorer?model=gfs&map=conus&field={field_id}")
-
-        with tabs[5]:
-            st.subheader("🌀 Vorticity Desk")
-            native=gfs_vorticity_native_status()
-            if native["ok"]:
-                st.success(f"NOAA/NCEP native GFS secondary-field catalog reachable • {native['date']}")
-            else:
-                st.warning("Native GFS secondary-field catalog did not answer this refresh.")
-            st.write("The workstation does **not** invent vorticity from point guidance. Vorticity is treated as a mapped field and handed off to the WDS-rendered products or native NOAA GRIB2 source.")
-            vc1,vc2=st.columns(2)
-            for col,lev in zip([vc1,vc2],[500,850]):
-                with col:
-                    field_id,field_name=WDS_VORT_FIELDS[lev]
-                    st.markdown(f"### {lev} mb")
-                    st.write("Primary synoptic vorticity diagnosis." if lev==500 else "Lower-tropospheric vorticity / circulation diagnosis.")
-                    st.link_button(f"Open {field_name}",
-                        f"https://portal.weatherdecisionsolutions.com/weather/model-explorer?model=gfs&map=conus&field={field_id}",
-                        key=f"vort_{lev}")
-            st.link_button("NOAA GFS GRIB Filter","https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25b")
-            st.caption("WDS charts are opened in the source portal because its rendered image is session-generated rather than a stable public image URL.")
-
-        with tabs[6]:
-            st.subheader("🧭 Cross-Level Diagnosis")
-            st.caption("A compact vertical profile for the selected valid time. This is diagnostic guidance, not an automated forecast conclusion.")
-            profile=qdf.set_index("Level")
-            p1,p2=st.columns(2)
-            with p1:
-                st.markdown("#### Temperature by pressure level")
-                st.bar_chart(profile[["Temp °F"]])
-            with p2:
-                st.markdown("#### Wind by pressure level")
-                st.bar_chart(profile[["Wind mph"]])
-
-            h500=profile.loc["500 mb","6h Height Δ m"]
-            w250=profile.loc["250 mb","Wind mph"]
-            rh700=profile.loc["700 mb","RH %"]
-            rh850=profile.loc["850 mb","RH %"]
-            signals=[]
-            if pd.notna(h500):
-                signals.append(f"500-mb heights {'falling' if h500 < -15 else 'rising' if h500 > 15 else 'steady'} ({h500:+.0f} m / 6h)")
-            if pd.notna(w250):
-                signals.append(f"250-mb wind {w250:.0f} mph")
-            if pd.notna(rh700) and pd.notna(rh850):
-                signals.append(f"850/700-mb RH {rh850:.0f}% / {rh700:.0f}%")
-            st.markdown("**Current column signals:** " + " • ".join(signals))
-
-        st.divider()
-        st.subheader("Forecaster Notes")
-        st.text_area("Upper-air diagnosis / pattern notes",height=140,key=f"uanotes_{zone}_{model_name}")
-        st.caption("Use this area for your own trough/ridge placement, shortwave timing, jet coupling, thermal-advection and confidence notes.")
-
-    except Exception as e:
-        st.error(f"{model_name} upper-air guidance is temporarily unavailable for this refresh.")
-        st.caption(str(e))
-
-elif page == "WDS Integration":
-    st.header("🛒 WDS One-Stop Launch Center")
-    st.caption("Forecast Intelligence is your launch vehicle into the 4070/WDS ecosystem. One workspace, one click to the operational tool you need.")
-
-    portal_tab,models_tab,fav_tab,sound_tab,track_tab=st.tabs([
-        "4070 Portal","Model Field Library","Brandon's Favorites","Sounding Lab","Storm Track Desk"
-    ])
-
-    with portal_tab:
-        st.subheader("4070 / WDS Portal Launcher")
-        st.caption("Organized around the WDS functions currently documented for Insiders. Each button opens the WDS destination in a new tab.")
-        categories=st.tabs(list(WDS_PORTAL_CATALOG))
-        for cat_tab,(category,items) in zip(categories,WDS_PORTAL_CATALOG.items()):
-            with cat_tab:
-                st.markdown(f"### {category}")
-                cols=st.columns(3)
-                for i,(name,path,desc) in enumerate(items):
-                    with cols[i%3]:
-                        st.markdown('<div class="dwg-card">',unsafe_allow_html=True)
-                        st.markdown(f"**{name}**")
-                        st.caption(desc)
-                        st.link_button(f"Open {name}",wds_portal_url(path),use_container_width=True)
-                        st.markdown('</div>',unsafe_allow_html=True)
-        st.info("Some WDS tools live inside a parent dashboard rather than having a documented permanent deep-link. Those buttons intentionally open the correct WDS section instead of guessing an unsupported URL.")
-
-    with models_tab:
-        st.subheader("WDS Model Field Library")
+elif page == "E-Wall":
+    st.header("🧱 4070 Forecast E-Wall")
+    st.caption("A compact electronic map-wall inspired launch board: current data, NOAA text, radar/satellite, upper air and 4070 model products without menu hunting.")
+    ew_tabs=st.tabs(["CURRENT","SAT / RADAR","UPPER AIR","MODELS","NOAA TEXT","4070"])
+    with ew_tabs[0]:
+        cols=st.columns(4)
+        for col,(zone,loc) in zip(cols,LOCATIONS.items()):
+            o=obs_data[zone]
+            with col:
+                st.markdown(f"### {loc['city']}")
+                st.metric("Temp",fmt(o["temp"],0,"°F"))
+                st.write(f"DP {fmt(o['dew'],0,'°F')} • Wind {fmt(o['wind'],0,' mph')}")
+                st.write(o["text"])
+    with ew_tabs[1]:
         c1,c2,c3=st.columns(3)
-        model=c1.selectbox("Model",["gfs","ecmwf","hrrr","rap","nbm"],key="wds_library_model")
-        map_name=c2.selectbox("Domain",["conus","northeast","midatlantic"],key="wds_library_map")
-        forecast_type=c3.selectbox("Forecast problem",["General Forecast","Synoptic / Coastal Storm","Severe Weather","Winter Weather","Heavy Rain / Flood"],key="wds_library_problem")
-        st.markdown("#### Recommended now")
-        cols=st.columns(3)
-        for i,name in enumerate(wds_recommended_products(forecast_type)):
-            _,_,field=WDS_FAVORITES[name]
-            with cols[i%3]:
-                st.link_button(name,wds_model_url(model,map_name,field),use_container_width=True)
-        st.markdown("#### All known WDS fields")
-        cols=st.columns(3)
-        for i,(name,(_,_,field)) in enumerate(WDS_FAVORITES.items()):
-            with cols[i%3]:
-                st.link_button(name,wds_model_url(model,map_name,field),key=f"lib_{field}",use_container_width=True)
-        field=st.text_input("Custom WDS field ID",value="500_vort_ht",key="wds_custom_field")
-        st.link_button("Launch custom field",wds_model_url(model,map_name,field))
-
-    with fav_tab:
-        st.subheader("⭐ Brandon's Model Favorites")
-        groups={
-            "Synoptic":["500 mb Vorticity / Heights / Winds","500 mb RH / Heights","250 mb Wind / Heights"],
-            "Thermal / Moisture":["925 mb Temperature / Heights","850 mb Temperature / Heights","700 mb RH / Heights"],
-            "Surface / Impacts":["Total Precipitation","10 m Wind Gust","Simulated Radar"],
-            "Convective / Winter":["CAPE / CIN","850 mb Vorticity / Heights","10:1 Snowfall"],
-        }
-        for group,names in groups.items():
-            st.markdown(f"### {group}")
-            cols=st.columns(3)
-            for i,name in enumerate(names):
-                m,mp,f=WDS_FAVORITES[name]
-                with cols[i%3]:
-                    st.link_button(name,wds_model_url(m,mp,f),use_container_width=True)
-
-    with sound_tab:
-        st.subheader("🎈 Atmospheric Profile / Sounding Lab")
-        sc1,sc2,sc3=st.columns(3)
-        szone=sc1.selectbox("Location",list(LOCATIONS),key="sound_zone")
-        smodel=sc2.selectbox("Profile model",list(UPPER_MODELS),key="sound_model")
-        shour=sc3.select_slider("Forecast hour",options=[0,3,6,9,12,18,24,30,36,48,60,72],value=0,key="sound_hour")
-        sloc=LOCATIONS[szone]
-        try:
-            sdf=upper_air_model(sloc["lat"],sloc["lon"],UPPER_MODELS[smodel],4)
-            sfuture,srow,sprior=upper_air_snapshot(sdf,shour)
-            profile=[]
-            for lev in UPPER_LEVELS:
-                profile.append({"Level":f"{lev} mb","Temperature °F":srow.get(f"temperature_{lev}hPa"),"RH %":srow.get(f"relative_humidity_{lev}hPa"),"Wind mph":srow.get(f"wind_speed_{lev}hPa"),"Direction °":srow.get(f"wind_direction_{lev}hPa"),"Height m":srow.get(f"geopotential_height_{lev}hPa")})
-            pdf=pd.DataFrame(profile)
-            st.write(f"**{smodel} • {szone} • Valid {srow['time']:%a %b %d %I:%M %p} ET**")
-            st.dataframe(pdf,use_container_width=True,hide_index=True)
-            pc1,pc2=st.columns(2)
-            with pc1: st.bar_chart(pdf.set_index("Level")[["Temperature °F"]])
-            with pc2: st.bar_chart(pdf.set_index("Level")[["Wind mph"]])
-        except Exception as e:
-            st.warning("The pressure-level profile did not load on this refresh.")
-            st.caption(str(e))
-        st.link_button("Open WDS Model Explorer / map-click sounding",wds_model_url("gfs","conus","500_vort_ht"))
-
-    with track_tab:
-        st.subheader("🌀 Storm Track Intelligence Desk")
-        st.caption("Launch the WDS model/track environment and keep your Forecast Intelligence reasoning beside it.")
-        st.link_button("Open WDS Model Explorer / Storm Tracks",WDS_BASE,use_container_width=True)
-        tc1,tc2=st.columns(2)
-        with tc1:
-            for name in ["500 mb Vorticity / Heights / Winds","250 mb Wind / Heights","850 mb Vorticity / Heights","Total Precipitation","10 m Wind Gust"]:
-                m,mp,f=WDS_FAVORITES[name]
-                st.link_button(name,wds_model_url(m,mp,f),key=f"track_{f}",use_container_width=True)
-        with tc2:
-            st.text_input("System / event name",key="track_event")
-            st.selectbox("Track confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key="track_conf")
-            st.text_area("Track trend / model spread / closest-approach notes",height=220,key="track_notes")
-
-    st.divider()
-    st.caption("Forecast Intelligence launches documented WDS/4070 functions without scraping session-generated graphics or bypassing WDS authentication.")
-
-elif page == "Discussion Desk":
-    st.header("📝 DWG Discussion Desk")
-    st.caption("Forecast reasoning first. Live workstation data can seed the discussion; Brandon remains the forecaster of record.")
-
-    discussion_type=st.tabs(["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"])
-    if "discussion_store" not in st.session_state:
-        st.session_state["discussion_store"]={}
-
-    labels=["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"]
-    for tab,label in zip(discussion_type,labels):
-        with tab:
-            k=label.replace(" ","_").replace("/","_")
-            c1,c2,c3=st.columns([1,1,1])
-            zone=c1.selectbox("Zone",["Statewide"]+list(LOCATIONS),key=f"z_{k}")
-            confidence=c2.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key=f"c_{k}")
-            impact=c3.selectbox("Impact",["Minimal","Low","Elevated","High","Extreme"],key=f"i_{k}")
-
-            title=st.text_input("Discussion title",value=label,key=f"title_{k}")
-            period=st.text_input("Forecast period",value="Next 24–72 hours",key=f"period_{k}")
-            primary=st.text_input("Primary forecast concern",key=f"concern_{k}")
-            changed=st.text_input("What changed since the previous forecast?",key=f"changed_{k}")
-
-            seedzone=list(LOCATIONS)[0] if zone=="Statewide" else zone
-            default=st.session_state["discussion_store"].get(k,discussion_seed(seedzone))
-            body=st.text_area("Forecast discussion",value=default,height=360,key=f"body_{k}")
-
-            key_messages=st.text_area("Key Messages",height=120,key=f"keys_{k}")
-            delaware=st.text_area("Delaware Differences",height=120,key=f"de_{k}")
-            decisions=st.text_area("Decision Impacts",height=120,key=f"decision_{k}")
-
-            b1,b2,b3=st.columns(3)
-            if b1.button("Save discussion",key=f"save_{k}",type="primary"):
-                st.session_state["discussion_store"][k]=body
-                st.success("Discussion saved for this browser session.")
-            if b2.button("Refresh data starter",key=f"seed_{k}"):
-                st.session_state["discussion_store"][k]=discussion_seed(seedzone)
-                st.session_state[f"body_{k}"]=discussion_seed(seedzone)
-                st.rerun()
-            if b3.button("Clear draft",key=f"clear_{k}"):
-                st.session_state["discussion_store"][k]=""
-                st.session_state[f"body_{k}"]=""
-                st.rerun()
-
-            st.divider()
-            st.markdown("#### Discussion Header Preview")
-            st.write(f"**{title}**")
-            st.write(f"**Forecast period:** {period} • **Confidence:** {confidence} • **Impact:** {impact}")
-            if primary: st.write(f"**Primary concern:** {primary}")
-            if changed: st.write(f"**What changed:** {changed}")
-            st.caption(f"Updated {datetime.now(ZoneInfo('America/New_York')):%b %d, %Y • %I:%M %p %Z}")
-
-elif page == "Model Graphics":
-    st.header("📈 Model Graphics Center")
-    st.caption("Time-series graphics for Delaware point guidance.")
-    zone=st.selectbox("Zone",list(LOCATIONS),key="graphicszone")
-    hours=st.select_slider("Forecast horizon",options=[12,24,36,48,72],value=48)
-    frames=load_zone_models(zone,3)
-    if not frames:
-        st.error("No model feeds returned on this refresh.")
-    else:
-        tabs=st.tabs(["Temperature","QPF","Wind Gust","Dewpoint","MSLP"])
-        specs=[
-            ("temperature_2m","Temperature °F",False),
-            ("precipitation","Hourly QPF in",True),
-            ("wind_gusts_10m","Wind gust mph",False),
-            ("dew_point_2m","Dewpoint °F",False),
-            ("pressure_msl","MSLP mb",False)
-        ]
-        for tab,(var,label,bars) in zip(tabs,specs):
-            with tab:
-                chart=pd.DataFrame()
-                for name,df in frames.items():
-                    p=current_future(df,hours)[["time",var]].set_index("time").rename(columns={var:name})
-                    chart=p if chart.empty else chart.join(p,how="outer")
-                st.markdown(f"### {label}")
-                if bars and len(chart.columns):
-                    st.line_chart(chart,use_container_width=True)
-                    st.caption("Each line is hourly model QPF; totals are summarized below.")
-                else:
-                    st.line_chart(chart,use_container_width=True)
-        st.subheader("Model Summary Cards")
-        cards=st.columns(min(3,max(1,len(frames))))
-        for i,(name,df) in enumerate(frames.items()):
-            sm=model_summary(df)
-            with cards[i%len(cards)]:
-                st.markdown('<div class="dwg-card">',unsafe_allow_html=True)
-                st.markdown(f"**{name}**")
-                st.write(f"24h QPF: **{fmt(sm.get('qpf24'),2,' in')}**")
-                st.write(f"Peak gust: **{fmt(sm.get('gust24'),0,' mph')}**")
-                st.write(f"Temperature: **{fmt(sm.get('temp_now'),0,'°F')}**")
-                st.markdown('</div>',unsafe_allow_html=True)
-
-elif page == "Model Battle Board":
-    st.header("⚔️ Model Battle Board")
-    st.caption("Consensus, spread, timing and outliers — one board.")
-    zone=st.selectbox("Zone",list(LOCATIONS),key="battlezone")
-    frames=load_zone_models(zone,3)
-    rows=[]
-    for name,df in frames.items():
-        sm=model_summary(df)
-        onset,peak,end=precip_timing(df)
-        rows.append({"Model":name,"24h QPF":sm.get("qpf24"),"Peak Gust":sm.get("gust24"),
-                     "Temp":sm.get("temp_now"),"Onset":onset,"Peak":peak,"End":end})
-    bdf=pd.DataFrame(rows)
-    if bdf.empty:
-        st.error("No model guidance returned.")
-    else:
-        det=bdf[bdf["Model"].isin(["HRRR","RAP","GFS","ECMWF IFS","NBM"])].copy()
-        qmed=det["24h QPF"].median()
-        gmed=det["Peak Gust"].median()
-        tmed=det["Temp"].median()
-        qs=det["24h QPF"].max()-det["24h QPF"].min()
-        gs=det["Peak Gust"].max()-det["Peak Gust"].min()
-        ts=det["Temp"].max()-det["Temp"].min()
-        score,label=confidence_from_spread(ts,gs,qs)
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric("Consensus QPF",fmt(qmed,2," in"))
-        c2.metric("Consensus Gust",fmt(gmed,0," mph"))
-        c3.metric("Consensus Temp",fmt(tmed,0,"°F"))
-        c4.metric("Agreement",f"{score}/100",label)
-
+        c1.link_button("KDOX Radar Loop","https://radar.weather.gov/ridge/standard/KDOX_loop.gif",use_container_width=True)
+        c2.link_button("KDIX Radar Loop","https://radar.weather.gov/ridge/standard/KDIX_loop.gif",use_container_width=True)
+        c3.link_button("GOES-East Imagery","https://www.star.nesdis.noaa.gov/GOES/conus.php",use_container_width=True)
+        st.image("https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/625x375.gif",use_container_width=True)
+    with ew_tabs[2]:
+        levels=[("925 TEMP/HT","925_temp_ht"),("850 TEMP/HT","850_temp_ht"),("850 VORT/HT","850_vort_ht"),("700 RH/HT","700_rh_ht"),("500 VORT/HT","500_vort_ht"),("500 RH/HT","500_rh_ht"),("250 WIND/HT","250_wnd_ht")]
+        cols=st.columns(4)
+        for i,(name,field) in enumerate(levels):
+            cols[i%4].link_button(name,wds_model_url("gfs","conus",field),use_container_width=True)
+    with ew_tabs[3]:
+        products=[("GFS 500MB","gfs","500_vort_ht"),("ECMWF 500MB","ecmwf","500_vort_ht"),("HRRR RADAR","hrrr","sim_radar_comp"),("NBM QPF","nbm","precip_ptot"),("GFS QPF","gfs","precip_ptot"),("GFS GUST","gfs","wds_10m_gust"),("GFS CAPE","gfs","wds_cape"),("GFS SNOW","gfs","wds_snow_ptot")]
+        cols=st.columns(4)
+        for i,(name,m,field) in enumerate(products):
+            cols[i%4].link_button(name,wds_model_url(m,"conus",field),use_container_width=True)
+    with ew_tabs[4]:
         c1,c2=st.columns(2)
-        with c1:
-            st.markdown("### QPF Battle")
-            st.bar_chart(det.set_index("Model")[["24h QPF"]])
-        with c2:
-            st.markdown("### Wind Battle")
-            st.bar_chart(det.set_index("Model")[["Peak Gust"]])
-
-        st.subheader("Timing Board")
-        show=bdf.copy()
-        for col in ["Onset","Peak","End"]:
-            show[col]=show[col].apply(lambda x: x.strftime("%a %I %p") if hasattr(x,"strftime") else x)
-        st.dataframe(show,use_container_width=True,hide_index=True)
-
-        st.subheader("Outlier Check")
-        notes=[]
-        if len(det)>=3:
-            for _,r in det.iterrows():
-                if abs(r["24h QPF"]-qmed) > max(.15,qs*.45):
-                    notes.append(f"{r['Model']} is an outlier on QPF ({r['24h QPF']:.2f} in vs {qmed:.2f} in median).")
-                if abs(r["Peak Gust"]-gmed) > max(5,gs*.45):
-                    notes.append(f"{r['Model']} is an outlier on gusts ({r['Peak Gust']:.0f} mph vs {gmed:.0f} mph median).")
-        if notes:
-            for n in notes: st.warning(n)
-        else:
-            st.success("No major deterministic outlier detected by the current spread rules.")
+        try:
+            afd=nws_text_product("AFD")
+            c1.text_area("AREA FORECAST DISCUSSION",afd["text"] if afd else "Unavailable",height=420)
+        except Exception: c1.warning("AFD unavailable.")
+        try:
+            hwo=nws_text_product("HWO")
+            c2.text_area("HAZARDOUS WEATHER OUTLOOK",hwo["text"] if hwo else "Unavailable",height=420)
+        except Exception: c2.warning("HWO unavailable.")
+    with ew_tabs[5]:
+        cols=st.columns(4)
+        cols[0].link_button("4070 PORTAL",WDS_PORTAL,use_container_width=True)
+        cols[1].link_button("4070 RADAR",wds_portal_url("/radar"),use_container_width=True)
+        cols[2].link_button("MODEL EXPLORER",WDS_BASE,use_container_width=True)
+        cols[3].link_button("FORECASTS",wds_portal_url("/forecast"),use_container_width=True)
 
 elif page == "Observations":
     st.header("Surface Observations")
@@ -1379,34 +921,72 @@ elif page == "Hazards":
     else:
         st.success("No active Delaware NWS alerts returned.")
 
-elif page == "Forecaster Desk":
-    st.header("Brandon's Forecast Desk")
-    zone = st.selectbox("Zone", list(LOCATIONS), key="deskzone")
-    c1,c2,c3 = st.columns(3)
-    with c1:
-        qpf_low = st.number_input("QPF low (in.)",0.0,20.0,0.0,0.05)
-        qpf_high = st.number_input("QPF high (in.)",0.0,20.0,0.0,0.05)
-    with c2:
-        gust = st.number_input("Peak gust (mph)",0,150,0,1)
-        pop = st.slider("Precipitation probability",0,100,0,5)
-    with c3:
-        confidence = st.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"])
-        impact = st.selectbox("Impact",["Minimal","Low","Elevated","High","Extreme"])
-    reasons = st.multiselect("Adjustment reasoning",[
-        "Model consensus","Model bias","Observational trend","Radar evolution",
-        "Synoptic reasoning","Local climatology","Ensemble spread","Other"
-    ])
-    take = st.text_area("Brandon's Take", height=120)
-    if st.button("Save Forecast Decision", type="primary"):
-        record = {
-            "saved":datetime.now(timezone.utc).isoformat(),"zone":zone,
-            "qpf_low":qpf_low,"qpf_high":qpf_high,"gust":gust,"pop":pop,
-            "confidence":confidence,"impact":impact,"reasons":reasons,"brandons_take":take
-        }
-        st.session_state.setdefault("decisions", []).append(record)
-        st.success("Forecast decision saved for this browser session.")
-    if st.session_state.get("decisions"):
-        st.dataframe(pd.DataFrame(st.session_state["decisions"]), use_container_width=True, hide_index=True)
+elif page == "Forecast Production":
+    st.header("✍️ Daily Forecast Production Desk")
+    st.caption("Enter the forecast once in a consistent structure. The desk builds the decision table and a ready-to-edit post from the same information.")
+    sections=["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"]
+    tabs=st.tabs(sections)
+    for tab,section in zip(tabs,sections):
+        with tab:
+            k=section.lower().replace(" ","_").replace("/","_")
+            st.markdown(f"### {section}")
+            a,b,c=st.columns(3)
+            status=a.selectbox("Status",["🟢 Favorable","👀 Stay Weather-Aware","🟡 Monitoring","⚠️ Consider Adjustments","🔴 High Impact"],key=f"{k}_status")
+            confidence=b.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key=f"{k}_conf")
+            window=c.text_input("Valid / forecast window",placeholder="Sunday morning through Sunday night",key=f"{k}_window")
+            headline=st.text_input("Headline / primary message",placeholder="One sentence: what matters most?",key=f"{k}_headline")
+            c1,c2=st.columns(2)
+            with c1:
+                current=st.text_area("Current assessment",height=110,placeholder="What do you expect to happen?",key=f"{k}_current")
+                change=st.text_area("What changed?",height=100,placeholder="Changes from the previous forecast/model cycle.",key=f"{k}_change")
+                best=st.text_input("Best usable period",placeholder="Saturday afternoon, especially north",key=f"{k}_best")
+            with c2:
+                concern=st.text_area("Primary concern / hazard",height=110,placeholder="Main forecast problem or limiting factor.",key=f"{k}_concern")
+                trigger=st.text_area("Next trigger / review point",height=100,placeholder="What would make you change or escalate the forecast?",key=f"{k}_trigger")
+                poor=st.text_input("Questionable / least favorable period",placeholder="Sunday afternoon-evening",key=f"{k}_poor")
+            guidance=st.text_area("Decision guidance",height=90,placeholder="What should the reader do with this forecast?",key=f"{k}_guidance")
+            north=st.text_input("Northern Delaware",key=f"{k}_north")
+            central=st.text_input("Central Delaware",key=f"{k}_central")
+            sussex=st.text_input("Inland Sussex",key=f"{k}_sussex")
+            beaches=st.text_input("Delaware Beaches",key=f"{k}_beaches")
+            take=st.text_area("Brandon's Take",height=100,key=f"{k}_take")
+
+            table=pd.DataFrame([
+                {"Category":"Overall","Status":status,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+                {"Category":"Northern Delaware","Status":north,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+                {"Category":"Central Delaware","Status":central,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+                {"Category":"Inland Sussex","Status":sussex,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+                {"Category":"Delaware Beaches","Status":beaches,"Best usable period":best,"Questionable / least favorable period":poor,"Decision guidance":guidance},
+            ])
+            st.markdown("#### Decision Table Preview")
+            st.dataframe(table,use_container_width=True,hide_index=True)
+            post=f"""**{headline or section}**
+
+{status} • **Confidence:** {confidence}
+**Valid:** {window or 'Not entered'}
+
+{current}
+
+**What changed:** {change}
+**Primary concern:** {concern}
+**Best window:** {best}
+**Least favorable:** {poor}
+**Decision:** {guidance}
+
+**Delaware differences**
+• Northern Delaware: {north}
+• Central Delaware: {central}
+• Inland Sussex: {sussex}
+• Beaches: {beaches}
+
+**Next review point:** {trigger}
+
+**Brandon's Take:** {take}"""
+            st.markdown("#### Post Draft Preview")
+            st.text_area("Ready-to-edit post",post,height=360,key=f"{k}_post_preview")
+            if st.button(f"Save {section} draft",key=f"save_{k}",type="primary"):
+                st.session_state.setdefault("forecast_production",{})[section]={"saved":datetime.now(timezone.utc).isoformat(),"table":table.to_dict("records"),"post":post}
+                st.success("Draft saved for this browser session.")
 
 elif page == "Verification":
     st.header("Forecast Verification")
@@ -1440,5 +1020,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**4070-first redesign:** 🟢 v1.0.1 — Morning Desk, NOAA reader, Delaware forecasts, verified/safe launch routing")
+    st.write("**4070 Forecast Workstation:** 🟢 v1.1 — animated satellite, E-Wall, structured Forecast Production Desk")
     st.write("**Discussion Desk:** 🟢 v0.4")
