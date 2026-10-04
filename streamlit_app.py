@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.7.1"
+APP_VERSION = "1.0"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -395,6 +395,29 @@ def gfs_vorticity_native_status():
             pass
     return {"ok":False,"date":None,"url":"https://nomads.ncep.noaa.gov/"}
 
+@st.cache_data(ttl=300)
+def nws_text_product(product_type):
+    data=get_json(f"https://api.weather.gov/products/types/{product_type}/locations/PHI")
+    items=data.get("@graph",[])
+    if not items:
+        return None
+    latest=items[0]
+    pid=latest.get("id","").rstrip("/").split("/")[-1]
+    if not pid:
+        return None
+    prod=get_json(f"https://api.weather.gov/products/{pid}")
+    return {"text":prod.get("productText",""),"issued":prod.get("issuanceTime"),"id":pid}
+
+@st.cache_data(ttl=600)
+def nws_zone_forecast(lat,lon):
+    meta=point_metadata(lat,lon)["properties"]
+    zone_url=meta.get("forecastZone")
+    if not zone_url:
+        return None
+    zid=zone_url.rstrip("/").split("/")[-1]
+    z=get_json(f"https://api.weather.gov/zones/forecast/{zid}/forecast")
+    return {"zone":zid,"name":z.get("properties",{}).get("name",zid),"periods":z.get("properties",{}).get("periods",[])}
+
 WDS_BASE = "https://portal.weatherdecisionsolutions.com/weather/model-explorer"
 WDS_PORTAL = "https://4070weather.com/portal"
 WDS_FAVORITES = {
@@ -478,7 +501,7 @@ def discussion_seed(zone):
     ]
     return "\n".join(lines)
 
-st.sidebar.title("DWG Intelligence")
+st.sidebar.title("4070 Forecast Intelligence")
 st.sidebar.caption("Data Over Drama")
 display_mode = st.sidebar.segmented_control("Display", ["☀️ Bright", "🌙 Dark"], default="☀️ Bright")
 if display_mode == "🌙 Dark":
@@ -499,14 +522,13 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 </style>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Workstation", [
-    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite","Upper Air","WDS Integration",
-    "Model Graphics","Model Battle Board","Discussion Desk","Forecast Guidance","Model Intelligence",
-    "Model Trends","Hazards","Forecaster Desk","Verification","System Status"
+page = st.sidebar.radio("Forecast Intelligence", [
+    "Morning Desk","4070 Launchpad","NOAA Discussions","Delaware Forecasts","Radar & Satellite",
+    "Models & Upper Air","Weather Wall","Discussion Desk","Hazards","Forecaster Desk","System Status"
 ])
 
 now = datetime.now(ZoneInfo("America/New_York"))
-st.title("🌦️ DWG Forecast Intelligence")
+st.title("🌦️ 4070 • DWG Forecast Intelligence")
 st.caption(f"Delaware Forecasting Workstation • v{APP_VERSION} • {now:%A, %B %d, %Y • %I:%M %p %Z}")
 
 live_ok = True
@@ -520,7 +542,165 @@ for zone, loc in LOCATIONS.items():
         live_ok = False
         obs_data[zone] = demo_obs(loc["city"])
 
-if page == "Command Center":
+if page == "Morning Desk":
+    st.markdown("## ☕ Morning Forecast Desk")
+    st.caption("Your one-stop morning briefing: observations, official NOAA/NWS text, Delaware forecasts, alerts, radar and 4070 model tools.")
+
+    q1,q2,q3,q4=st.columns(4)
+    q1.link_button("🌐 Open 4070 Portal",WDS_PORTAL,use_container_width=True)
+    q2.link_button("📡 4070 Radar",wds_portal_url("/radar"),use_container_width=True)
+    q3.link_button("🧭 4070 Model Explorer",WDS_BASE,use_container_width=True)
+    q4.link_button("🗺️ 4070 NWS Maps",wds_portal_url("/nws-maps"),use_container_width=True)
+
+    try: alerts=delaware_alerts()
+    except Exception: alerts=[]
+    a,b,c,d=st.columns(4)
+    a.metric("NWS Data","LIVE" if live_ok else "FALLBACK")
+    b.metric("Active DE Alerts",len(alerts))
+    c.metric("Forecast Zones",4)
+    d.metric("Updated",now.strftime("%I:%M %p"))
+
+    if alerts:
+        st.markdown("### ⚠️ Active Delaware Alerts")
+        for feat in alerts[:5]:
+            p=feat["properties"]; st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
+
+    st.markdown("### Delaware Now")
+    cols=st.columns(4)
+    for col,(zone,loc) in zip(cols,LOCATIONS.items()):
+        o=obs_data[zone]
+        with col:
+            st.markdown('<div class="dwg-card">',unsafe_allow_html=True)
+            st.markdown(f"**{zone}**")
+            st.metric(loc["city"],fmt(o["temp"],0,"°F"))
+            st.write(f"Dew {fmt(o['dew'],0,'°F')} • Wind {fmt(o['wind'],0,' mph')}")
+            st.write(f"Gust {fmt(o['gust'],0,' mph')} • {o['text']}")
+            st.markdown('</div>',unsafe_allow_html=True)
+
+    st.markdown("### 📝 Today's NOAA/NWS Reading")
+    afdcol,hwocol=st.columns(2)
+    with afdcol:
+        st.markdown("#### Area Forecast Discussion — NWS Mount Holly")
+        try:
+            afd=nws_text_product("AFD")
+            if afd:
+                st.caption(f"Issued {pd.to_datetime(afd['issued']).tz_convert('America/New_York'):%b %d • %I:%M %p ET}" if afd.get("issued") else "Latest issuance")
+                st.text_area("Latest AFD",afd["text"],height=430,key="morning_afd",label_visibility="collapsed")
+            else: st.warning("Latest AFD unavailable.")
+        except Exception as e: st.warning("Mount Holly AFD unavailable on this refresh.")
+    with hwocol:
+        st.markdown("#### Hazardous Weather Outlook — NWS Mount Holly")
+        try:
+            hwo=nws_text_product("HWO")
+            if hwo:
+                st.caption(f"Issued {pd.to_datetime(hwo['issued']).tz_convert('America/New_York'):%b %d • %I:%M %p ET}" if hwo.get("issued") else "Latest issuance")
+                st.text_area("Latest HWO",hwo["text"],height=430,key="morning_hwo",label_visibility="collapsed")
+            else: st.warning("Latest HWO unavailable.")
+        except Exception: st.warning("Mount Holly HWO unavailable on this refresh.")
+
+    st.markdown("### 🔎 Morning Launch Rack")
+    r1,r2,r3,r4=st.columns(4)
+    r1.link_button("500 mb Vorticity",wds_model_url("gfs","conus","500_vort_ht"),use_container_width=True)
+    r2.link_button("850 mb Temperature",wds_model_url("gfs","conus","850_temp_ht"),use_container_width=True)
+    r3.link_button("Total Precipitation",wds_model_url("gfs","conus","precip_ptot"),use_container_width=True)
+    r4.link_button("Wind Gusts",wds_model_url("gfs","conus","wds_10m_gust"),use_container_width=True)
+
+elif page == "4070 Launchpad":
+    st.header("🌐 4070 Weather Launchpad")
+    st.caption("4070 is the primary visualization platform. Forecast Intelligence keeps its most-used tools one click away.")
+    p1,p2,p3,p4=st.columns(4)
+    p1.link_button("4070 Home",WDS_PORTAL,use_container_width=True)
+    p2.link_button("Radar",wds_portal_url("/radar"),use_container_width=True)
+    p3.link_button("NWS Maps",wds_portal_url("/nws-maps"),use_container_width=True)
+    p4.link_button("Model Explorer",WDS_BASE,use_container_width=True)
+    cats=st.tabs(list(WDS_PORTAL_CATALOG))
+    for tab,(category,items) in zip(cats,WDS_PORTAL_CATALOG.items()):
+        with tab:
+            cols=st.columns(3)
+            for i,(name,path,desc) in enumerate(items):
+                with cols[i%3]:
+                    st.markdown(f"**{name}**")
+                    st.caption(desc)
+                    target=WDS_BASE if path=="MODEL_EXPLORER" else wds_portal_url(path)
+                    st.link_button(f"Open {name}",target,use_container_width=True)
+
+elif page == "NOAA Discussions":
+    st.header("📝 NOAA / NWS Discussion Reader")
+    st.caption("Latest operational text from NWS Mount Holly (PHI), presented inside the Intelligencer.")
+    tabs=st.tabs(["Area Forecast Discussion","Hazardous Weather Outlook"])
+    for tab,ptype,title in zip(tabs,["AFD","HWO"],["Area Forecast Discussion","Hazardous Weather Outlook"]):
+        with tab:
+            try:
+                prod=nws_text_product(ptype)
+                if prod:
+                    st.subheader(title)
+                    if prod.get("issued"):
+                        st.caption(f"Issued {pd.to_datetime(prod['issued']).tz_convert('America/New_York'):%A, %b %d • %I:%M %p ET}")
+                    st.text_area(title,prod["text"],height=720,key=f"reader_{ptype}",label_visibility="collapsed")
+                else: st.warning(f"No current {ptype} product returned.")
+            except Exception as e:
+                st.error(f"The latest {ptype} could not be retrieved from api.weather.gov.")
+
+elif page == "Delaware Forecasts":
+    st.header("📍 Delaware Forecast Center")
+    st.caption("Official NWS point and forecast-zone access for the four DWG operating areas.")
+    zone=st.segmented_control("Area",list(LOCATIONS),default=list(LOCATIONS)[0])
+    loc=LOCATIONS[zone]
+    point_tab,zone_tab=st.tabs(["Point Forecast","Area / Zone Forecast"])
+    with point_tab:
+        try:
+            periods=forecast(loc["lat"],loc["lon"])
+            for p in periods[:10]:
+                with st.expander(f"{p['name']} • {p['temperature']}°{p['temperatureUnit']} • {p['shortForecast']}",expanded=p["number"]<=2):
+                    st.write(p["detailedForecast"]); st.caption(f"Wind: {p['windDirection']} {p['windSpeed']}")
+        except Exception: st.error("NWS point forecast is temporarily unavailable.")
+    with zone_tab:
+        try:
+            z=nws_zone_forecast(loc["lat"],loc["lon"])
+            if z:
+                st.write(f"**NWS Forecast Zone:** {z['zone']} — {z['name']}")
+                for p in z["periods"][:10]:
+                    st.markdown(f"### {p.get('name','Period')}")
+                    st.write(p.get("detailedForecast") or p.get("shortForecast") or "Forecast text unavailable.")
+            else: st.warning("Forecast-zone information was unavailable.")
+        except Exception: st.error("NWS zone forecast is temporarily unavailable.")
+
+elif page == "Models & Upper Air":
+    st.header("🧭 Models & Upper Air")
+    st.caption("Forecast Intelligence diagnostics with 4070/WDS as the primary chart and visualization engine.")
+    mtabs=st.tabs(["4070 Model Rack","Upper-Air Profile","Model Consensus"])
+    with mtabs[0]:
+        c1,c2=st.columns(2)
+        model=c1.selectbox("4070 model",["gfs","ecmwf","hrrr","rap","nbm"],key="v1_model")
+        domain=c2.selectbox("Domain",["conus","northeast","midatlantic"],key="v1_domain")
+        cols=st.columns(3)
+        for i,(name,(_,_,field)) in enumerate(WDS_FAVORITES.items()):
+            with cols[i%3]: st.link_button(name,wds_model_url(model,domain,field),key=f"v1_{field}",use_container_width=True)
+    with mtabs[1]:
+        zone=st.selectbox("Delaware area",list(LOCATIONS),key="v1_upper_zone")
+        model_name=st.selectbox("Profile model",list(UPPER_MODELS),key="v1_upper_model")
+        hour=st.select_slider("Hours from now",options=[0,3,6,12,18,24,36,48,60,72],value=0,key="v1_upper_hour")
+        loc=LOCATIONS[zone]
+        try:
+            df=upper_air_model(loc["lat"],loc["lon"],UPPER_MODELS[model_name],4)
+            future,row,prior=upper_air_snapshot(df,hour)
+            rows=[]
+            for lev in UPPER_LEVELS:
+                dh,dt,ht,tt,w=upper_signal(row,prior,lev)
+                rows.append({"Level":f"{lev} mb","Temp °F":row.get(f"temperature_{lev}hPa"),"RH %":row.get(f"relative_humidity_{lev}hPa"),"Height m":row.get(f"geopotential_height_{lev}hPa"),"6h Δ Height":dh,"Wind mph":w,"Signal":f"{ht} / {tt}"})
+            st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+        except Exception: st.warning("Upper-air profile unavailable on this refresh.")
+    with mtabs[2]:
+        zone=st.selectbox("Consensus area",list(LOCATIONS),key="v1_cons_zone")
+        frames=load_zone_models(zone,2)
+        rows=[]
+        for name,df in frames.items():
+            sm=model_summary(df); rows.append({"Model":name,"24h QPF":sm.get("qpf24"),"Peak Gust":sm.get("gust24"),"Temperature":sm.get("temp_now")})
+        if rows: st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+        else: st.warning("Model guidance unavailable.")
+
+elif page == "Weather Wall":
+if False:
     a,b,c,d = st.columns(4)
     a.metric("NWS Data", "LIVE" if live_ok else "DEMO/FALLBACK")
     try:
@@ -554,7 +734,7 @@ if page == "Command Center":
         p = f["properties"]
         st.warning(f"**{p.get('event','Alert')}** — {p.get('headline','')}")
 
-elif page == "Delaware Weather Wall":
+elif page == "Weather Wall":
     st.header("🗺️ Delaware Weather Wall")
     st.caption("One-screen situational awareness for the four DWG forecast zones.")
 
@@ -1295,5 +1475,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**WDS One-Stop Launch Center:** 🟢 v0.7.1 — safe WDS routing, model library, favorites, sounding and storm-track desks")
+    st.write("**4070-first redesign:** 🟢 v1.0 — Morning Desk, NOAA reader, Delaware forecasts, WDS launchpad")
     st.write("**Discussion Desk:** 🟢 v0.4")
