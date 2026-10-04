@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.3"
+APP_VERSION = "0.4"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -322,6 +322,60 @@ def arrow(delta, threshold):
     if delta < -threshold: return "↓"
     return "→"
 
+UPPER_LEVELS = [925,850,700,500,250]
+
+@st.cache_data(ttl=900)
+def upper_air_point(lat, lon, days=3):
+    hourly=[]
+    for lev in UPPER_LEVELS:
+        hourly += [f"temperature_{lev}hPa",f"geopotential_height_{lev}hPa",
+                   f"wind_speed_{lev}hPa",f"wind_direction_{lev}hPa"]
+        if lev in [850,700]:
+            hourly.append(f"relative_humidity_{lev}hPa")
+    params={"latitude":lat,"longitude":lon,"hourly":",".join(hourly),
+            "models":"ncep_gfs_global","forecast_days":days,
+            "temperature_unit":"fahrenheit","wind_speed_unit":"mph",
+            "timezone":"America/New_York"}
+    data=get_json("https://api.open-meteo.com/v1/forecast",params=params,timeout=18)
+    df=pd.DataFrame(data["hourly"]); df["time"]=pd.to_datetime(df["time"])
+    return df
+
+@st.cache_data(ttl=600)
+def gfs_vorticity_native_status():
+    now=datetime.now(timezone.utc)
+    for offset in range(0,3):
+        dt=now-pd.Timedelta(days=offset)
+        day=dt.strftime("%Y%m%d")
+        try:
+            url=f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25b.pl?dir=%2Fgfs.{day}"
+            r=requests.get(url,headers=HEADERS,timeout=12)
+            if r.ok:
+                return {"ok":True,"date":day,"url":url}
+        except Exception:
+            pass
+    return {"ok":False,"date":None,"url":"https://nomads.ncep.noaa.gov/"}
+
+def discussion_seed(zone):
+    loc=LOCATIONS[zone]
+    obs=obs_data.get(zone,{})
+    lines=[
+        f"{zone} / {loc['city']}",
+        f"Current conditions: {fmt(obs.get('temp'),0,'°F')}, dewpoint {fmt(obs.get('dew'),0,'°F')}, wind {fmt(obs.get('wind'),0,' mph')}.",
+        "",
+        "SYNOPSIS:",
+        "",
+        "MODEL / TREND DISCUSSION:",
+        "",
+        "TIMING:",
+        "",
+        "IMPACTS / DELAWARE DIFFERENCES:",
+        "",
+        "CONFIDENCE:",
+        "",
+        "BRANDON'S TAKE:"
+    ]
+    return "\n".join(lines)
+
 st.sidebar.title("DWG Intelligence")
 st.sidebar.caption("Data Over Drama")
 display_mode = st.sidebar.segmented_control("Display", ["☀️ Bright", "🌙 Dark"], default="☀️ Bright")
@@ -344,8 +398,8 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Workstation", [
-    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite",
-    "Model Graphics","Model Battle Board","Forecast Guidance","Model Intelligence",
+    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite","Upper Air",
+    "Model Graphics","Model Battle Board","Discussion Desk","Forecast Guidance","Model Intelligence",
     "Model Trends","Hazards","Forecaster Desk","Verification","System Status"
 ])
 
@@ -519,6 +573,108 @@ elif page == "Radar & Satellite":
         with c2:
             st.markdown("**GOES-19 GeoColor**")
             st.image("https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg",use_container_width=True)
+
+elif page == "Upper Air":
+    st.header("🌐 Upper Air Analysis")
+    st.caption("GFS pressure-level guidance for Delaware plus direct NOAA/NCEP native vorticity access.")
+    zone=st.selectbox("Delaware zone",list(LOCATIONS),key="upperzone")
+    loc=LOCATIONS[zone]
+    hour=st.select_slider("Forecast hour",options=[0,6,12,18,24,36,48,60,72],value=0)
+    try:
+        ua=upper_air_point(loc["lat"],loc["lon"],3)
+        now_local=pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+        future=ua[ua["time"]>=now_local]
+        row=future.iloc[min(hour,len(future)-1)] if len(future) else ua.iloc[0]
+        valid=row["time"]
+        st.write(f"**Valid:** {valid:%A %b %d • %I:%M %p} ET")
+        tabs=st.tabs(["925 mb","850 mb","700 mb","500 mb","250 mb","Vorticity"])
+        notes={
+            925:"Low-level thermal field and boundary-layer flow.",
+            850:"Low-level temperature/advection and moisture transport.",
+            700:"Mid-level moisture and flow; useful for dry slots and forcing context.",
+            500:"Primary synoptic steering level; troughs, ridges and shortwaves.",
+            250:"Upper-level jet structure and high-level flow."
+        }
+        for tab,lev in zip(tabs[:5],UPPER_LEVELS):
+            with tab:
+                c1,c2,c3,c4=st.columns(4)
+                c1.metric("Temperature",fmt(row.get(f"temperature_{lev}hPa"),0,"°F"))
+                c2.metric("Height",fmt(row.get(f"geopotential_height_{lev}hPa"),0," m"))
+                c3.metric("Wind",fmt(row.get(f"wind_speed_{lev}hPa"),0," mph"))
+                c4.metric("Direction",fmt(row.get(f"wind_direction_{lev}hPa"),0,"°"))
+                if lev in [850,700]:
+                    st.metric("Relative Humidity",fmt(row.get(f"relative_humidity_{lev}hPa"),0,"%"))
+                st.info(notes[lev])
+                series=future.head(72)[["time",f"geopotential_height_{lev}hPa",f"wind_speed_{lev}hPa"]].set_index("time")
+                st.markdown("#### Height trend")
+                st.line_chart(series[[f"geopotential_height_{lev}hPa"]],use_container_width=True)
+                st.markdown("#### Wind trend")
+                st.line_chart(series[[f"wind_speed_{lev}hPa"]],use_container_width=True)
+        with tabs[5]:
+            native=gfs_vorticity_native_status()
+            st.subheader("Absolute Vorticity — Native GFS")
+            st.write("The native GFS secondary-variable GRIB2 feed carries **ABSV (absolute vorticity)** on pressure levels including 925, 850, 700, 500 and 250 mb.")
+            if native["ok"]:
+                st.success(f"NOAA/NCEP native GFS vorticity feed reachable • catalog {native['date']}")
+            else:
+                st.warning("Native GFS vorticity catalog did not answer this refresh.")
+            st.markdown("**Operational emphasis:** 500-mb vorticity is the primary synoptic diagnostic here; 250 mb is better paired with jet/wind analysis, while 850/925 mb are usually more useful for thermal advection and low-level flow.")
+            st.link_button("Open NOAA GFS GRIB Filter","https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25b")
+            st.caption("Native vorticity field decoding/map rendering is intentionally separated from the lightweight point charts so the hosted app remains responsive.")
+    except Exception as e:
+        st.error("Upper-air point guidance is temporarily unavailable.")
+        st.caption(str(e))
+
+elif page == "Discussion Desk":
+    st.header("📝 DWG Discussion Desk")
+    st.caption("Forecast reasoning first. Live workstation data can seed the discussion; Brandon remains the forecaster of record.")
+
+    discussion_type=st.tabs(["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"])
+    if "discussion_store" not in st.session_state:
+        st.session_state["discussion_store"]={}
+
+    labels=["Daily Forecast","Severe / Hazards","Winter Weather","Coastal / Marine","Tropical","Model Discussion","Planning / Decisions"]
+    for tab,label in zip(discussion_type,labels):
+        with tab:
+            k=label.replace(" ","_").replace("/","_")
+            c1,c2,c3=st.columns([1,1,1])
+            zone=c1.selectbox("Zone",["Statewide"]+list(LOCATIONS),key=f"z_{k}")
+            confidence=c2.selectbox("Confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key=f"c_{k}")
+            impact=c3.selectbox("Impact",["Minimal","Low","Elevated","High","Extreme"],key=f"i_{k}")
+
+            title=st.text_input("Discussion title",value=label,key=f"title_{k}")
+            period=st.text_input("Forecast period",value="Next 24–72 hours",key=f"period_{k}")
+            primary=st.text_input("Primary forecast concern",key=f"concern_{k}")
+            changed=st.text_input("What changed since the previous forecast?",key=f"changed_{k}")
+
+            seedzone=list(LOCATIONS)[0] if zone=="Statewide" else zone
+            default=st.session_state["discussion_store"].get(k,discussion_seed(seedzone))
+            body=st.text_area("Forecast discussion",value=default,height=360,key=f"body_{k}")
+
+            key_messages=st.text_area("Key Messages",height=120,key=f"keys_{k}")
+            delaware=st.text_area("Delaware Differences",height=120,key=f"de_{k}")
+            decisions=st.text_area("Decision Impacts",height=120,key=f"decision_{k}")
+
+            b1,b2,b3=st.columns(3)
+            if b1.button("Save discussion",key=f"save_{k}",type="primary"):
+                st.session_state["discussion_store"][k]=body
+                st.success("Discussion saved for this browser session.")
+            if b2.button("Refresh data starter",key=f"seed_{k}"):
+                st.session_state["discussion_store"][k]=discussion_seed(seedzone)
+                st.session_state[f"body_{k}"]=discussion_seed(seedzone)
+                st.rerun()
+            if b3.button("Clear draft",key=f"clear_{k}"):
+                st.session_state["discussion_store"][k]=""
+                st.session_state[f"body_{k}"]=""
+                st.rerun()
+
+            st.divider()
+            st.markdown("#### Discussion Header Preview")
+            st.write(f"**{title}**")
+            st.write(f"**Forecast period:** {period} • **Confidence:** {confidence} • **Impact:** {impact}")
+            if primary: st.write(f"**Primary concern:** {primary}")
+            if changed: st.write(f"**What changed:** {changed}")
+            st.caption(f"Updated {datetime.now(ZoneInfo('America/New_York')):%b %d, %Y • %I:%M %p %Z}")
 
 elif page == "Model Graphics":
     st.header("📈 Model Graphics Center")
@@ -853,3 +1009,5 @@ elif page == "System Status":
     st.write("**Radar / Satellite Lab:** 🟢 v0.3")
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
+    st.write("**Upper Air Analysis:** 🟢 v0.4")
+    st.write("**Discussion Desk:** 🟢 v0.4")
