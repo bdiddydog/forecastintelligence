@@ -1272,5 +1272,6 @@ elif page == "System Status":
     st.write("**Radar / Satellite Lab:** 🟢 v0.3")
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
-    st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")\n    st.write("**WDS Integration Center:** 🟢 v0.6 — quick launch, favorites, profile lab, storm-track desk")
+    st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
+    st.write("**WDS Integration Center:** 🟢 v0.6 — quick launch, favorites, profile lab, storm-track desk")
     st.write("**Discussion Desk:** 🟢 v0.4")
