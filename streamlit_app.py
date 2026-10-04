@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.2.3b"
+APP_VERSION = "1.2.3c"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -523,7 +523,7 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Forecast Intelligence", [
-    "Morning Desk","4070 Launchpad","NOAA Discussions","Delaware Forecasts","Radar & Satellite",
+    "Morning Desk","4070 Launchpad","NOAA Discussions","Delaware Forecasts",
     "Models & Upper Air","E-Wall","Forecast Production","Hazards","System Status"
 ])
 
