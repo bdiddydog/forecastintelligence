@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.1"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -437,7 +437,7 @@ WDS_FAVORITES = {
 WDS_PORTAL_CATALOG = {
     "Forecasts": [
         ("Weather Forecast","/forecast","Search U.S./Canadian locations and saved forecasts."),
-        ("NWS Maps","/nws-maps","Forecast maps, severe outlooks, drought, surface and upper-air charts."),
+        ("NWS Maps","/forecast","WDS documents NWS Maps under Forecasts, but its permanent deep-link is not verified; open the 4070 forecast/dashboard and choose NWS Maps."),
         ("Tropical","/forecast","Tropical tools live inside the WDS forecast/dashboard navigation; open the portal here, then choose Tropical."),
     ],
     "Radar & Satellite": [
@@ -550,7 +550,7 @@ if page == "Morning Desk":
     q1.link_button("🌐 Open 4070 Portal",WDS_PORTAL,use_container_width=True)
     q2.link_button("📡 4070 Radar",wds_portal_url("/radar"),use_container_width=True)
     q3.link_button("🧭 4070 Model Explorer",WDS_BASE,use_container_width=True)
-    q4.link_button("🗺️ 4070 NWS Maps",wds_portal_url("/nws-maps"),use_container_width=True)
+    q4.link_button("🗺️ NOAA/NWS Maps", "https://www.wpc.ncep.noaa.gov/html/sfc2.shtml", use_container_width=True)
 
     try: alerts=delaware_alerts()
     except Exception: alerts=[]
@@ -611,7 +611,7 @@ elif page == "4070 Launchpad":
     p1,p2,p3,p4=st.columns(4)
     p1.link_button("4070 Home",WDS_PORTAL,use_container_width=True)
     p2.link_button("Radar",wds_portal_url("/radar"),use_container_width=True)
-    p3.link_button("NWS Maps",wds_portal_url("/nws-maps"),use_container_width=True)
+    p3.link_button("NOAA/NWS Maps", "https://www.wpc.ncep.noaa.gov/html/sfc2.shtml", use_container_width=True)
     p4.link_button("Model Explorer",WDS_BASE,use_container_width=True)
     cats=st.tabs(list(WDS_PORTAL_CATALOG))
     for tab,(category,items) in zip(cats,WDS_PORTAL_CATALOG.items()):
@@ -1440,5 +1440,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**4070-first redesign:** 🟢 v1.0 — Morning Desk, NOAA reader, Delaware forecasts, WDS launchpad")
+    st.write("**4070-first redesign:** 🟢 v1.0.1 — Morning Desk, NOAA reader, Delaware forecasts, verified/safe launch routing")
     st.write("**Discussion Desk:** 🟢 v0.4")
