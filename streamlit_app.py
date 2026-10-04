@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.5"
+APP_VERSION = "0.6"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -395,6 +395,45 @@ def gfs_vorticity_native_status():
             pass
     return {"ok":False,"date":None,"url":"https://nomads.ncep.noaa.gov/"}
 
+WDS_BASE = "https://portal.weatherdecisionsolutions.com/weather/model-explorer"
+WDS_FAVORITES = {
+    "500 mb Vorticity / Heights / Winds": ("gfs","conus","500_vort_ht"),
+    "500 mb RH / Heights": ("gfs","conus","500_rh_ht"),
+    "850 mb Temperature / Heights": ("gfs","conus","850_temp_ht"),
+    "850 mb Vorticity / Heights": ("gfs","conus","850_vort_ht"),
+    "700 mb RH / Heights": ("gfs","conus","700_rh_ht"),
+    "250 mb Wind / Heights": ("gfs","conus","250_wnd_ht"),
+    "925 mb Temperature / Heights": ("gfs","conus","925_temp_ht"),
+    "10 m Wind Gust": ("gfs","conus","wds_10m_gust"),
+    "Total Precipitation": ("gfs","conus","precip_ptot"),
+    "Simulated Radar": ("gfs","conus","sim_radar_comp"),
+    "10:1 Snowfall": ("gfs","conus","wds_snow_ptot"),
+    "CAPE / CIN": ("gfs","conus","wds_cape"),
+}
+
+def wds_model_url(model="gfs", map_name="conus", field="500_vort_ht"):
+    return f"{WDS_BASE}?model={model}&map={map_name}&field={field}"
+
+def wds_recommended_products(forecast_type):
+    recipes={
+        "Synoptic / Coastal Storm":[
+            "500 mb Vorticity / Heights / Winds","850 mb Temperature / Heights",
+            "700 mb RH / Heights","250 mb Wind / Heights","Total Precipitation","10 m Wind Gust"],
+        "Severe Weather":[
+            "CAPE / CIN","500 mb Vorticity / Heights / Winds","250 mb Wind / Heights",
+            "850 mb Vorticity / Heights","Simulated Radar","10 m Wind Gust"],
+        "Winter Weather":[
+            "925 mb Temperature / Heights","850 mb Temperature / Heights","700 mb RH / Heights",
+            "500 mb Vorticity / Heights / Winds","Total Precipitation","10:1 Snowfall"],
+        "Heavy Rain / Flood":[
+            "700 mb RH / Heights","850 mb Temperature / Heights",
+            "500 mb Vorticity / Heights / Winds","Total Precipitation","Simulated Radar"],
+        "General Forecast":[
+            "500 mb Vorticity / Heights / Winds","850 mb Temperature / Heights",
+            "700 mb RH / Heights","250 mb Wind / Heights","Total Precipitation"],
+    }
+    return recipes.get(forecast_type,recipes["General Forecast"])
+
 def discussion_seed(zone):
     loc=LOCATIONS[zone]
     obs=obs_data.get(zone,{})
@@ -438,7 +477,7 @@ h1,h2,h3,p,span,label {{color:{textc}}}
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Workstation", [
-    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite","Upper Air",
+    "Command Center","Delaware Weather Wall","Observations","Radar & Satellite","Upper Air","WDS Integration",
     "Model Graphics","Model Battle Board","Discussion Desk","Forecast Guidance","Model Intelligence",
     "Model Trends","Hazards","Forecaster Desk","Verification","System Status"
 ])
@@ -745,6 +784,109 @@ elif page == "Upper Air":
     except Exception as e:
         st.error(f"{model_name} upper-air guidance is temporarily unavailable for this refresh.")
         st.caption(str(e))
+
+elif page == "WDS Integration":
+    st.header("🔗 WDS Integration Center")
+    st.caption("Forecast Intelligence is the reasoning desk; WDS/4070 is the visualization layer. Open the right chart with the forecast problem already in mind.")
+
+    launch_tab,fav_tab,sound_tab,track_tab=st.tabs([
+        "Quick Launch","Brandon's Favorites","Sounding Lab","Storm Track Desk"
+    ])
+
+    with launch_tab:
+        st.subheader("WDS Quick Launch")
+        lc1,lc2,lc3=st.columns(3)
+        forecast_type=lc1.selectbox("Forecast problem",[
+            "General Forecast","Synoptic / Coastal Storm","Severe Weather","Winter Weather","Heavy Rain / Flood"
+        ],key="wds_problem")
+        model=lc2.selectbox("WDS model",["gfs","ecmwf","hrrr","rap","nbm"],key="wds_model")
+        map_name=lc3.selectbox("Map domain",["conus","northeast","midatlantic"],key="wds_map")
+        st.markdown("#### Recommended diagnostic set")
+        st.caption("The buttons below are selected by forecast problem. They open the corresponding WDS Model Explorer field; if a model/domain combination is unsupported, switch it in WDS.")
+        products=wds_recommended_products(forecast_type)
+        cols=st.columns(3)
+        for i,name in enumerate(products):
+            _,_,field=WDS_FAVORITES[name]
+            with cols[i%3]:
+                st.link_button(name,wds_model_url(model,map_name,field),use_container_width=True)
+
+        st.markdown("#### Custom field launcher")
+        field=st.text_input("WDS field ID",value="500_vort_ht",key="wds_custom_field")
+        st.link_button("Open custom WDS field",wds_model_url(model,map_name,field))
+
+    with fav_tab:
+        st.subheader("⭐ Brandon's Model Favorites")
+        st.caption("A compact operational rack of the WDS products most useful for Delaware forecasting.")
+        groups={
+            "Synoptic":["500 mb Vorticity / Heights / Winds","500 mb RH / Heights","250 mb Wind / Heights"],
+            "Thermal / Moisture":["925 mb Temperature / Heights","850 mb Temperature / Heights","700 mb RH / Heights"],
+            "Surface / Impacts":["Total Precipitation","10 m Wind Gust","Simulated Radar"],
+            "Convective / Winter":["CAPE / CIN","850 mb Vorticity / Heights","10:1 Snowfall"],
+        }
+        for group,names in groups.items():
+            st.markdown(f"### {group}")
+            cols=st.columns(3)
+            for i,name in enumerate(names):
+                m,mp,f=WDS_FAVORITES[name]
+                with cols[i%3]:
+                    st.link_button(name,wds_model_url(m,mp,f),use_container_width=True)
+
+    with sound_tab:
+        st.subheader("🎈 Atmospheric Profile / Sounding Lab")
+        st.caption("Forecast Intelligence supplies the Delaware pressure-level profile; WDS remains the map/sounding visualization workspace.")
+        sc1,sc2,sc3=st.columns(3)
+        szone=sc1.selectbox("Location",list(LOCATIONS),key="sound_zone")
+        smodel=sc2.selectbox("Profile model",list(UPPER_MODELS),key="sound_model")
+        shour=sc3.select_slider("Forecast hour",options=[0,3,6,9,12,18,24,30,36,48,60,72],value=0,key="sound_hour")
+        sloc=LOCATIONS[szone]
+        try:
+            sdf=upper_air_model(sloc["lat"],sloc["lon"],UPPER_MODELS[smodel],4)
+            sfuture,srow,sprior=upper_air_snapshot(sdf,shour)
+            profile=[]
+            for lev in UPPER_LEVELS:
+                profile.append({
+                    "Level":f"{lev} mb",
+                    "Temperature °F":srow.get(f"temperature_{lev}hPa"),
+                    "RH %":srow.get(f"relative_humidity_{lev}hPa"),
+                    "Wind mph":srow.get(f"wind_speed_{lev}hPa"),
+                    "Direction °":srow.get(f"wind_direction_{lev}hPa"),
+                    "Height m":srow.get(f"geopotential_height_{lev}hPa"),
+                })
+            pdf=pd.DataFrame(profile)
+            st.write(f"**{smodel} • {szone} • Valid {srow['time']:%a %b %d %I:%M %p} ET**")
+            st.dataframe(pdf,use_container_width=True,hide_index=True)
+            pc1,pc2=st.columns(2)
+            with pc1:
+                st.markdown("#### Thermal profile")
+                st.bar_chart(pdf.set_index("Level")[["Temperature °F"]])
+            with pc2:
+                st.markdown("#### Wind profile")
+                st.bar_chart(pdf.set_index("Level")[["Wind mph"]])
+            st.info("This first Sounding Lab is a pressure-level profile, not yet a full Skew-T/hodograph. CAPE, CIN, LCL and shear diagnostics should only be added when the underlying profile fields are available rather than estimated.")
+        except Exception as e:
+            st.warning("The pressure-level profile did not load on this refresh.")
+            st.caption(str(e))
+        st.link_button("Open WDS Model Explorer for map-click sounding",wds_model_url("gfs","conus","500_vort_ht"))
+
+    with track_tab:
+        st.subheader("🌀 Storm Track Intelligence Desk")
+        st.caption("The first version is a storm-analysis launch desk. It does not invent cyclone positions or ensemble tracks without a structured WDS track feed.")
+        tc1,tc2=st.columns(2)
+        with tc1:
+            st.markdown("#### Synoptic track diagnostics")
+            st.write("Use these fields together to diagnose the steering pattern, circulation evolution and impact envelope.")
+            for name in ["500 mb Vorticity / Heights / Winds","250 mb Wind / Heights","850 mb Vorticity / Heights","Total Precipitation","10 m Wind Gust"]:
+                m,mp,f=WDS_FAVORITES[name]
+                st.link_button(name,wds_model_url(m,mp,f),key=f"track_{f}",use_container_width=True)
+        with tc2:
+            st.markdown("#### Forecaster track notes")
+            st.text_input("System / event name",key="track_event")
+            st.selectbox("Track confidence",["Low","Moderate-Low","Moderate","Moderate-High","High"],index=2,key="track_conf")
+            st.text_area("Track trend / model spread / closest-approach notes",height=220,key="track_notes")
+            st.caption("When WDS exposes a stable storm-track data/API endpoint, this desk can ingest positions and calculate consensus track, spread and run-to-run movement automatically.")
+
+    st.divider()
+    st.caption("WDS integration uses stable portal routes and field identifiers. Session-generated WDS blob images are intentionally not scraped or embedded.")
 
 elif page == "Discussion Desk":
     st.header("📝 DWG Discussion Desk")
@@ -1130,5 +1272,5 @@ elif page == "System Status":
     st.write("**Radar / Satellite Lab:** 🟢 v0.3")
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
-    st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
+    st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")\n    st.write("**WDS Integration Center:** 🟢 v0.6 — quick launch, favorites, profile lab, storm-track desk")
     st.write("**Discussion Desk:** 🟢 v0.4")
