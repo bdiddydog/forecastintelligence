@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="DWG Forecast Intelligence", page_icon="🌦️", layout="wide")
 
-APP_VERSION = "0.7"
+APP_VERSION = "0.7.1"
 LOCATIONS = {
     "Northern Delaware": {"city":"Wilmington","lat":39.7391,"lon":-75.5398},
     "Central Delaware": {"city":"Dover","lat":39.1582,"lon":-75.5244},
@@ -415,29 +415,29 @@ WDS_PORTAL_CATALOG = {
     "Forecasts": [
         ("Weather Forecast","/forecast","Search U.S./Canadian locations and saved forecasts."),
         ("NWS Maps","/nws-maps","Forecast maps, severe outlooks, drought, surface and upper-air charts."),
-        ("Tropical","/tropical","Written tropical forecast, storm map and HAFS graphics."),
+        ("Tropical","/forecast","Tropical tools live inside the WDS forecast/dashboard navigation; open the portal here, then choose Tropical."),
     ],
     "Radar & Satellite": [
         ("Radar","/radar","Interactive radar workspace and layer library."),
-        ("Satellite","/satellite","Regional satellite loops and favorites."),
+        ("Satellite","/radar","Satellite tools are reached from the Radar workspace/navigation."),
         ("Severe Probabilities","/radar","SPC Day 1 tornado, wind and hail probability layers in Radar."),
     ],
     "Models": [
         ("Model Explorer","/model-explorer","WDS model fields, frames, soundings and comparison tools."),
-        ("Storm Tracks","/models","Compare surface-low paths and ensemble guidance."),
-        ("2-Week Outlook","/models","Extended model outlook workspace."),
-        ("4-Week Outlook","/models","Subseasonal outlook workspace."),
-        ("9-Month Outlook","/models","Long-range outlook workspace."),
+        ("Storm Tracks","MODEL_EXPLORER","Open the WDS model workspace; choose Analysis Tools → Storm Tracks."),
+        ("2-Week Outlook","/forecast","Open the WDS portal; choose Models → Outlooks → 2-Week."),
+        ("4-Week Outlook","/forecast","Open the WDS portal; choose Models → Outlooks → 4-Week."),
+        ("9-Month Outlook","/forecast","Open the WDS portal; choose Models → Outlooks → 9-Month."),
     ],
     "Analytics": [
-        ("Weather History","/analytics","Past rain, snow and severe-weather reports."),
-        ("Precip Reports","/analytics","Submit and review rain and snow totals."),
-        ("Snow & Ice","/analytics","Interactive winter-weather dashboard."),
-        ("Rivers & Flooding","/analytics","Interactive hydrology/flood dashboard."),
+        ("Weather History","/forecast","Open the WDS portal; choose Analytics → Weather History."),
+        ("Precip Reports","/forecast","Open the WDS portal; choose Analytics → Precip Reports."),
+        ("Snow & Ice","/forecast","Open the WDS portal; choose Analytics → Snow & Ice."),
+        ("Rivers & Flooding","/forecast","Open the WDS portal; choose Analytics → Rivers & Flooding."),
     ],
     "Share & Settings": [
         ("Capture","/model-explorer","Open WDS, then use the camera control for branded images/GIFs."),
-        ("Notifications","/settings","Portal settings for desktop notifications."),
+        ("Notifications","/forecast","Open the WDS portal; then Settings → Notifications."),
     ],
 }
 
@@ -896,7 +896,7 @@ elif page == "WDS Integration":
     with track_tab:
         st.subheader("🌀 Storm Track Intelligence Desk")
         st.caption("Launch the WDS model/track environment and keep your Forecast Intelligence reasoning beside it.")
-        st.link_button("Open WDS Models / Storm Tracks",wds_portal_url("/models"),use_container_width=True)
+        st.link_button("Open WDS Model Explorer / Storm Tracks",WDS_BASE,use_container_width=True)
         tc1,tc2=st.columns(2)
         with tc1:
             for name in ["500 mb Vorticity / Heights / Winds","250 mb Wind / Heights","850 mb Vorticity / Heights","Total Precipitation","10 m Wind Gust"]:
@@ -1295,5 +1295,5 @@ elif page == "System Status":
     st.write("**Model Graphics Center:** 🟢 v0.3")
     st.write("**Model Battle Board:** 🟢 v0.3")
     st.write("**Upper-Air Workstation:** 🟢 v0.5 — GFS/RAP, cross-level diagnostics, WDS chart handoff")
-    st.write("**WDS One-Stop Launch Center:** 🟢 v0.7 — portal catalog, model library, favorites, sounding and storm-track desks")
+    st.write("**WDS One-Stop Launch Center:** 🟢 v0.7.1 — safe WDS routing, model library, favorites, sounding and storm-track desks")
     st.write("**Discussion Desk:** 🟢 v0.4")
